@@ -14,13 +14,11 @@ frame relative to the bary- or Heliocentric frame. It also depends on the
 assumed solar velocity vector. Here we'll demonstrate how to perform this
 transformation using a sky position and barycentric radial-velocity.
 
--------------------
 
 *By: Adrian Price-Whelan*
 
 *License: BSD*
 
--------------------
 
 """
 
@@ -29,6 +27,10 @@ transformation using a sky position and barycentric radial-velocity.
 # Astropy packages:
 import astropy.units as u
 import astropy.coordinates as coord
+
+################################################################################
+# Use the latest convention for the Galactocentric coordinates
+coord.galactocentric_frame_defaults.set('latest')
 
 ################################################################################
 # For this example, let's work with the coordinates and barycentric radial
@@ -44,7 +46,7 @@ icrs = coord.ICRS(ra=258.58356362*u.deg, dec=14.55255619*u.deg,
 # `~astropy.coordinates.CartesianRepresentation` object using the
 # ``.to_cartesian()`` method of the
 # `~astropy.coordinates.CartesianDifferential` object ``galcen_v_sun``:
-v_sun = coord.Galactocentric.galcen_v_sun.to_cartesian()
+v_sun = coord.Galactocentric().galcen_v_sun.to_cartesian()
 
 ################################################################################
 # We now need to get a unit vector in the assumed Galactic frame from the sky
@@ -78,7 +80,7 @@ def rv_to_gsr(c, v_sun=None):
     c : `~astropy.coordinates.BaseCoordinateFrame` subclass instance
         The radial velocity, associated with a sky coordinates, to be
         transformed.
-    v_sun : `~astropy.units.Quantity` (optional)
+    v_sun : `~astropy.units.Quantity`, optional
         The 3D velocity of the solar system barycenter in the GSR frame.
         Defaults to the same solar motion as in the
         `~astropy.coordinates.Galactocentric` frame.
@@ -90,7 +92,7 @@ def rv_to_gsr(c, v_sun=None):
 
     """
     if v_sun is None:
-        v_sun = coord.Galactocentric.galcen_v_sun.to_cartesian()
+        v_sun = coord.Galactocentric().galcen_v_sun.to_cartesian()
 
     gal = c.transform_to(coord.Galactic)
     cart_data = gal.data.to_cartesian()

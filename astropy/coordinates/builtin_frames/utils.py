@@ -38,15 +38,16 @@ def get_polar_motion(time):
     gets the two polar motion components in radians for use with apio13
     """
     # Get the polar motion from the IERS table
-    xp, yp, status = iers.IERS_Auto.open().pm_xy(time, return_status=True)
+    iers_table = iers.earth_orientation_table.get()
+    xp, yp, status = iers_table.pm_xy(time, return_status=True)
 
     wmsg = None
     if np.any(status == iers.TIME_BEFORE_IERS_RANGE):
         wmsg = ('Tried to get polar motions for times before IERS data is '
                 'valid. Defaulting to polar motion from the 50-yr mean for those. '
                 'This may affect precision at the 10s of arcsec level')
-        xp.ravel()[status.ravel() == iers.TIME_BEFORE_IERS_RANGE] = _DEFAULT_PM[0]
-        yp.ravel()[status.ravel() == iers.TIME_BEFORE_IERS_RANGE] = _DEFAULT_PM[1]
+        xp[status == iers.TIME_BEFORE_IERS_RANGE] = _DEFAULT_PM[0]
+        yp[status == iers.TIME_BEFORE_IERS_RANGE] = _DEFAULT_PM[1]
 
         warnings.warn(wmsg, AstropyWarning)
 
@@ -55,8 +56,8 @@ def get_polar_motion(time):
                 'valid. Defaulting to polar motion from the 50-yr mean for those. '
                 'This may affect precision at the 10s of arcsec level')
 
-        xp.ravel()[status.ravel() == iers.TIME_BEYOND_IERS_RANGE] = _DEFAULT_PM[0]
-        yp.ravel()[status.ravel() == iers.TIME_BEYOND_IERS_RANGE] = _DEFAULT_PM[1]
+        xp[status == iers.TIME_BEYOND_IERS_RANGE] = _DEFAULT_PM[0]
+        yp[status == iers.TIME_BEYOND_IERS_RANGE] = _DEFAULT_PM[1]
 
         warnings.warn(wmsg, AstropyWarning)
 
@@ -120,13 +121,7 @@ def norm(p):
     """
     Normalise a p-vector.
     """
-    if np.__version__ == '1.14.0':
-        # there is a bug in numpy v1.14.0 (fixed in 1.14.1) that causes
-        # this einsum call to break with the default of optimize=True
-        # see https://github.com/astropy/astropy/issues/7051
-        return p / np.sqrt(np.einsum('...i,...i', p, p, optimize=False))[..., np.newaxis]
-    else:
-        return p / np.sqrt(np.einsum('...i,...i', p, p))[..., np.newaxis]
+    return p / np.sqrt(np.einsum('...i,...i', p, p))[..., np.newaxis]
 
 
 def get_cip(jd1, jd2):

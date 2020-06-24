@@ -132,10 +132,10 @@ class Header:
 
     def __getitem__(self, key):
         if isinstance(key, slice):
-            return Header([copy.copy(c) for c in self._cards[key]])
+            return self.__class__([copy.copy(c) for c in self._cards[key]])
         elif self._haswildcard(key):
-            return Header([copy.copy(self._cards[idx])
-                           for idx in self._wildcardmatch(key)])
+            return self.__class__([copy.copy(self._cards[idx])
+                                   for idx in self._wildcardmatch(key)])
         elif (isinstance(key, str) and
               key.upper() in Card._commentary_keywords):
             key = key.upper()
@@ -744,14 +744,9 @@ class Header:
                         len(blocks) - actual_block_size + BLOCK_SIZE,
                         BLOCK_SIZE))
 
-            if not fileobj.simulateonly:
-                fileobj.flush()
-                try:
-                    offset = fileobj.tell()
-                except (AttributeError, OSError):
-                    offset = 0
-                fileobj.write(blocks.encode('ascii'))
-                fileobj.flush()
+            fileobj.flush()
+            fileobj.write(blocks.encode('ascii'))
+            fileobj.flush()
         finally:
             if close_file:
                 fileobj.close()
@@ -824,7 +819,7 @@ class Header:
             A new :class:`Header` instance.
         """
 
-        tmp = Header(copy.copy(card) for card in self._cards)
+        tmp = self.__class__((copy.copy(card) for card in self._cards))
         if strip:
             tmp._strip()
         return tmp
@@ -1294,7 +1289,7 @@ class Header:
             new cards to the header.
         """
 
-        temp = Header(cards)
+        temp = self.__class__(cards)
         if strip:
             temp._strip()
 
@@ -1636,7 +1631,7 @@ class Header:
         keyword, value, comment = card
 
         # Lookups for existing/known keywords are case-insensitive
-        keyword = keyword.upper()
+        keyword = keyword.strip().upper()
         if keyword.startswith('HIERARCH '):
             keyword = keyword[9:]
 

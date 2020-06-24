@@ -4,22 +4,22 @@
 Tests for model evaluation.
 Compare the results of some models with other programs.
 """
-
+# pylint: disable=invalid-name, no-member
 import pytest
 import numpy as np
 
 from numpy.testing import assert_allclose, assert_equal
 
-from .example_models import models_1D, models_2D
+from astropy import units as u
 from astropy.modeling import fitting, models
 from astropy.modeling.models import Gaussian2D
 from astropy.modeling.core import FittableModel
 from astropy.modeling.parameters import Parameter
 from astropy.modeling.polynomial import PolynomialBase
-from astropy import units as u
 from astropy.utils import minversion
 from astropy.tests.helper import assert_quantity_allclose
 from astropy.utils import NumpyRNGContext
+from .example_models import models_1D, models_2D
 
 try:
     import scipy
@@ -96,12 +96,12 @@ def test_inconsistent_input_shapes():
     x = np.arange(-1., 1, .2)
     y = x.copy()
     # check scalar input broadcasting works
-    assert np.abs(g(x,0) - g(x, 0*x)).sum() == 0
+    assert np.abs(g(x, 0) - g(x, 0 * x)).sum() == 0
     # but not array broadcasting
     x.shape = (10, 1)
     y.shape = (1, 10)
     with pytest.raises(ValueError):
-        g(x,y)
+        g(x, y)
 
 
 def test_custom_model_bounding_box():
@@ -335,6 +335,7 @@ class Fittable1DModelTester:
         self.y1 = np.arange(1, 10, .1)
         self.y2, self.x2 = np.mgrid[:10, :8]
 
+    @pytest.mark.filterwarnings(r'ignore:.*:RuntimeWarning')
     def test_input1D(self, model_class, test_parameters):
         """Test model with different input types."""
 
@@ -375,7 +376,7 @@ class Fittable1DModelTester:
         except NotImplementedError:
             pytest.skip("Bounding_box is not defined for model.")
 
-        if isinstance(model, models.Lorentz1D):
+        if isinstance(model, models.Lorentz1D) or isinstance(model, models.Drude1D):
             rtol = 0.01  # 1% agreement is enough due to very extended wings
             ddx = 0.1  # Finer sampling to "integrate" flux for narrow peak
         else:
@@ -427,6 +428,7 @@ class Fittable1DModelTester:
         assert_allclose(fitted, expected, atol=self.fit_error)
 
     @pytest.mark.skipif('not HAS_SCIPY')
+    @pytest.mark.filterwarnings(r'ignore:.*:RuntimeWarning')
     def test_deriv_1D(self, model_class, test_parameters):
         """
         Test the derivative of a model by comparing results with an estimated
@@ -482,12 +484,15 @@ def create_model(model_class, test_parameters, use_constraints=True,
         return model_class(*test_parameters[parameter_key], **constraints)
 
 
+@pytest.mark.filterwarnings(r'ignore:Model is linear in parameters.*')
+@pytest.mark.filterwarnings(r'ignore:The fit may be unsuccessful.*')
 @pytest.mark.parametrize(('model_class', 'test_parameters'),
                          sorted(models_1D.items(), key=lambda x: str(x[0])))
 class TestFittable1DModels(Fittable1DModelTester):
     pass
 
 
+@pytest.mark.filterwarnings(r'ignore:Model is linear in parameters.*')
 @pytest.mark.parametrize(('model_class', 'test_parameters'),
                          sorted(models_2D.items(), key=lambda x: str(x[0])))
 class TestFittable2DModels(Fittable2DModelTester):
@@ -580,11 +585,11 @@ def test_tabular_interp_1d():
 @pytest.mark.skipif("not HAS_SCIPY_14")
 def test_tabular_interp_2d():
     table = np.array([
-       [-0.04614432, -0.02512547, -0.00619557, 0.0144165, 0.0297525],
-       [-0.04510594, -0.03183369, -0.01118008, 0.01201388, 0.02496205],
-       [-0.05464094, -0.02804499, -0.00960086, 0.01134333, 0.02284104],
-       [-0.04879338, -0.02539565, -0.00440462, 0.01795145, 0.02122417],
-       [-0.03637372, -0.01630025, -0.00157902, 0.01649774, 0.01952131]])
+        [-0.04614432, -0.02512547, -0.00619557, 0.0144165, 0.0297525],
+        [-0.04510594, -0.03183369, -0.01118008, 0.01201388, 0.02496205],
+        [-0.05464094, -0.02804499, -0.00960086, 0.01134333, 0.02284104],
+        [-0.04879338, -0.02539565, -0.00440462, 0.01795145, 0.02122417],
+        [-0.03637372, -0.01630025, -0.00157902, 0.01649774, 0.01952131]])
 
     points = np.arange(0, 5)
     points = (points, points)
@@ -675,7 +680,7 @@ def test_with_bounding_box():
 
     t3 = models.Shift(10) & models.Scale(2) & models.Shift(-1)
     t3.bounding_box = ((4.3, 6.9), (6, 15), (-1, 10))
-    assert_allclose(t3([1, 1], [7, 7], [3, 5],with_bounding_box=True),
+    assert_allclose(t3([1, 1], [7, 7], [3, 5], with_bounding_box=True),
                     [[np.nan, 11], [np.nan, 14], [np.nan, 4]])
 
     trans3 = models.Shift(10) & models.Scale(2) & models.Shift(-1)
@@ -736,6 +741,16 @@ def test_tabular1d_inverse():
     with pytest.raises(NotImplementedError):
         t3.inverse((3, 3))
 
+    # Check that it uses the same kwargs as the original model
+    points = np.arange(5)
+    values = np.array([1.5, 3.4, 6.7, 7, 32])
+    t = models.Tabular1D(points, values)
+    with pytest.raises(ValueError):
+        t.inverse(100)
+    t = models.Tabular1D(points, values, bounds_error=False, fill_value=None)
+    result = t.inverse(100)
+    assert_allclose(t(result), 100)
+
 
 class classmodel(FittableModel):
     f = Parameter(default=1)
@@ -766,5 +781,5 @@ def test_parameter_inheritance():
     b = subclassmodel()
     assert b.param_names == ('f', 'x', 'y', 'h')
     assert b.h == 5
-    assert b.f ==3
+    assert b.f == 3
     assert b.f.fixed == True

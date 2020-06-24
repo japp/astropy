@@ -299,22 +299,36 @@ def test_spectral4(in_val, in_unit):
         assert_allclose(b, in_val)
 
 
-def test_spectraldensity2():
+@pytest.mark.parametrize('wav', (3500 * u.AA,
+                                 8.5654988e+14 * u.Hz,
+                                 1 / (3500 * u.AA),
+                                 5.67555959e-19 * u.J))
+def test_spectraldensity2(wav):
     # flux density
     flambda = u.erg / u.angstrom / u.cm ** 2 / u.s
     fnu = u.erg / u.Hz / u.cm ** 2 / u.s
 
-    a = flambda.to(fnu, 1, u.spectral_density(u.Quantity(3500, u.AA)))
+    a = flambda.to(fnu, 1, u.spectral_density(wav))
     assert_allclose(a, 4.086160166177361e-12)
+
+    # integrated flux
+    f_int = u.erg / u.cm ** 2 / u.s
+    phot_int = u.ph / u.cm ** 2 / u.s
+
+    a = f_int.to(phot_int, 1, u.spectral_density(wav))
+    assert_allclose(a, 1.7619408e+11)
+
+    a = phot_int.to(f_int, 1, u.spectral_density(wav))
+    assert_allclose(a, 5.67555959e-12)
 
     # luminosity density
     llambda = u.erg / u.angstrom / u.s
     lnu = u.erg / u.Hz / u.s
 
-    a = llambda.to(lnu, 1, u.spectral_density(u.Quantity(3500, u.AA)))
+    a = llambda.to(lnu, 1, u.spectral_density(wav))
     assert_allclose(a, 4.086160166177361e-12)
 
-    a = lnu.to(llambda, 1, u.spectral_density(u.Quantity(3500, u.AA)))
+    a = lnu.to(llambda, 1, u.spectral_density(wav))
     assert_allclose(a, 2.44728537142857e11)
 
 
@@ -459,6 +473,40 @@ def test_spectraldensity5():
         L_la, flux_phot_L_nu, u.spectral_density(wave)), flux_L_la, rtol=1e-6)
     assert_allclose(L_la.to(
         phot_L_nu, flux_L_la, u.spectral_density(wave)), flux_phot_L_nu, rtol=1e-6)
+
+
+def test_spectraldensity6():
+    """ Test surface brightness conversions. """
+    slam = u.erg / (u.cm ** 2 * u.s * u.AA * u.sr)
+    snu = u.erg / (u.cm ** 2 * u.s * u.Hz * u.sr)
+
+    wave = u.Quantity([4956.8, 4959.55, 4962.3], u.AA)
+    sb_flam = [3.9135e-14, 4.0209e-14, 3.9169e-14]
+    sb_fnu = [3.20735792e-25, 3.29903646e-25, 3.21727226e-25]
+
+    # S(nu) <--> S(lambda)
+    assert_allclose(snu.to(
+        slam, sb_fnu, u.spectral_density(wave)), sb_flam, rtol=1e-6)
+    assert_allclose(slam.to(
+        snu, sb_flam, u.spectral_density(wave)), sb_fnu, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ('from_unit', 'to_unit'),
+    [(u.ph / u.cm ** 2 / u.s, (u.cm * u.cm * u.s) ** -1),
+     (u.ph / u.cm ** 2 / u.s, u.erg / (u.cm * u.cm * u.s * u.keV)),
+     (u.erg / u.cm ** 2 / u.s, (u.cm * u.cm * u.s) ** -1),
+     (u.erg / u.cm ** 2 / u.s, u.erg / (u.cm * u.cm * u.s * u.keV))])
+def test_spectraldensity_not_allowed(from_unit, to_unit):
+    """Not allowed to succeed as
+    per https://github.com/astropy/astropy/pull/10015
+    """
+    with pytest.raises(u.UnitConversionError, match='not convertible'):
+        from_unit.to(to_unit, 1, u.spectral_density(1 * u.AA))
+
+    # The other way
+    with pytest.raises(u.UnitConversionError, match='not convertible'):
+        to_unit.to(from_unit, 1, u.spectral_density(1 * u.AA))
 
 
 def test_equivalent_units():
@@ -670,10 +718,22 @@ def test_equivalency_context_manager():
 
 
 def test_temperature():
-    from astropy.units.imperial import deg_F
+    from astropy.units.imperial import deg_F, deg_R
     t_k = 0 * u.K
     assert_allclose(t_k.to_value(u.deg_C, u.temperature()), -273.15)
     assert_allclose(t_k.to_value(deg_F, u.temperature()), -459.67)
+    t_k = 20 * u.K
+    assert_allclose(t_k.to_value(deg_R, u.temperature()), 36.0)
+    t_k = 20 * deg_R
+    assert_allclose(t_k.to_value(u.K, u.temperature()), 11.11, atol=0.01)
+    t_k = 20 * deg_F
+    assert_allclose(t_k.to_value(deg_R, u.temperature()), 479.67)
+    t_k = 20 * deg_R
+    assert_allclose(t_k.to_value(deg_F, u.temperature()), -439.67)
+    t_k = 20 * u.deg_C
+    assert_allclose(t_k.to_value(deg_R, u.temperature()), 527.67)
+    t_k = 20 * deg_R
+    assert_allclose(t_k.to_value(u.deg_C, u.temperature()), -262.039, atol=0.01)
 
 
 def test_temperature_energy():
@@ -729,6 +789,35 @@ def test_pixel_scale():
 
     assert_quantity_allclose(asec.to(u.pix, u.pixel_scale(pixscale)), pix)
     assert_quantity_allclose(asec.to(u.pix, u.pixel_scale(pixscale2)), pix)
+
+
+def test_pixel_scale_invalid_scale_unit():
+
+    pixscale = 0.4 * u.arcsec
+    pixscale2 = 0.4 * u.arcsec / u.pix ** 2
+
+    with pytest.raises(u.UnitsError, match="pixel dimension"):
+        u.pixel_scale(pixscale)
+    with pytest.raises(u.UnitsError, match="pixel dimension"):
+        u.pixel_scale(pixscale2)
+
+
+def test_pixel_scale_acceptable_scale_unit():
+
+    pix = 75 * u.pix
+    v = 3000 * (u.cm / u.s)
+
+    pixscale = 0.4 * (u.m / u.s / u.pix)
+    pixscale2 = 2.5 * (u.pix / (u.m / u.s))
+
+    assert_quantity_allclose(pix.to(u.m / u.s, u.pixel_scale(pixscale)), v)
+    assert_quantity_allclose(pix.to(u.km / u.s, u.pixel_scale(pixscale)), v)
+
+    assert_quantity_allclose(pix.to(u.m / u.s, u.pixel_scale(pixscale2)), v)
+    assert_quantity_allclose(pix.to(u.km / u.s, u.pixel_scale(pixscale2)), v)
+
+    assert_quantity_allclose(v.to(u.pix, u.pixel_scale(pixscale)), pix)
+    assert_quantity_allclose(v.to(u.pix, u.pixel_scale(pixscale2)), pix)
 
 
 def test_plate_scale():
@@ -790,3 +879,24 @@ def test_add_equivelencies():
 
     e2 = u.pixel_scale(10*u.arcsec/u.pixel) + [1, 2, 3]
     assert isinstance(e2, list)
+
+
+def test_pprint():
+    pprint_class = u.UnitBase.EquivalentUnitsList
+    equiv_units_to_Hz = u.Hz.find_equivalent_units()
+    assert pprint_class.__repr__(equiv_units_to_Hz).splitlines() == [
+        '  Primary name | Unit definition | Aliases     ',
+        '[',
+        '  Bq           | 1 / s           | becquerel    ,',
+        '  Ci           | 3.7e+10 / s     | curie        ,',
+        '  Hz           | 1 / s           | Hertz, hertz ,',
+        ']'
+    ]
+    assert pprint_class._repr_html_(equiv_units_to_Hz) == (
+        '<table style="width:50%">'
+        '<tr><th>Primary name</th><th>Unit definition</th>'
+        '<th>Aliases</th></tr>'
+        '<tr><td>Bq</td><td>1 / s</td><td>becquerel</td></tr>'
+        '<tr><td>Ci</td><td>3.7e+10 / s</td><td>curie</td></tr>'
+        '<tr><td>Hz</td><td>1 / s</td><td>Hertz, hertz</td></tr></table>'
+    )

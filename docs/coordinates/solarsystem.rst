@@ -16,7 +16,7 @@ cached after that.
 
 .. note::
    Using JPL ephemerides requires that the `jplephem
-   <https://pypi.python.org/pypi/jplephem>`_ package be installed. This is
+   <https://pypi.org/project/jplephem/>`_ package be installed. This is
    most conveniently achieved via ``pip install jplephem``, although whatever
    package management system you use might have it as well.
 
@@ -26,6 +26,13 @@ Three functions are provided; :meth:`~astropy.coordinates.get_body`,
 return |SkyCoord| objects in the `~astropy.coordinates.GCRS` frame, while the
 latter returns a `~astropy.coordinates.CartesianRepresentation` of the
 barycentric position of a body (i.e., in the `~astropy.coordinates.ICRS` frame).
+
+Examples
+--------
+
+..
+  EXAMPLE START
+  Using the Solar System Ephemerides
 
 Here is an example of using these functions with built-in ephemerides (i.e.,
 without the need to download a large ephemerides file)::
@@ -44,10 +51,12 @@ without the need to download a large ephemerides file)::
 Above, we used ``solar_system_ephemeris`` as a context, which sets the default
 ephemeris while in the ``with`` clause, and resets it at the end.
 
-To get more precise positions, you could use the ``de430`` ephemeris mentioned
-above, but between 1950 and 2050 you could also opt for the ``de432s``
-ephemeris, which is stored in a smaller, ~10 MB, file (which will be
-downloaded and cached when the ephemeris is set):
+To get more precise positions than is possible with the built-in ephemeris
+(see :ref:`astropy-coordinates-solarsystem-erfa-precision`), you
+could use the ``de430`` ephemeris mentioned above, or, if you only care about
+times between 1950 and 2050, opt for the ``de432s`` ephemeris, which is stored
+in a smaller, ~10 MB, file (which will be downloaded and cached when the
+ephemeris is set):
 
 .. doctest-requires:: jplephem
 
@@ -76,6 +85,9 @@ to the various functions:
   ... # doctest: +FLOAT_CMP
   <CartesianRepresentation (x, y, z) in km
       (  1.50107516e+08, -866828.92702829, -418980.15907332)>
+
+..
+  EXAMPLE END
 
 For a list of the bodies for which positions can be calculated, do:
 
@@ -118,3 +130,58 @@ For a list of the bodies for which positions can be calculated, do:
     polynomial model (as this requires no special download). So it is not safe
     to assume that ``get_body(time, 'sun')`` and ``get_sun(time)`` will give
     the same result.
+
+.. _astropy-coordinates-solarsystem-erfa-precision:
+
+Precision of the Built-In Ephemeris
+===================================
+
+The algorithm for calcuting positions and velocities for planets other than
+Earth used by ERFA is due to J.L. Simon, P. Bretagnon, J. Chapront,
+M. Chapront-Touze, G. Francou and J. Laskar (Bureau des Longitudes, Paris,
+France).  From comparisons with JPL ephemeris DE102, they quote the maximum
+errors over the interval 1800-2050 below. For more details see
+`cextern/erfa/plan94.c
+<https://github.com/astropy/astropy/blob/master/cextern/erfa/plan94.c>`_.
+For the Earth, the rms errors in position and velocity are about 4.6 km and
+1.4 mm/s, respectively (see `cextern/erfa/epv00.c
+<https://github.com/astropy/astropy/blob/master/cextern/erfa/epv00.c>`_).
+
+.. list-table::
+
+  * - Planet
+    - L (arcsec)
+    - B (arcsec)
+    - R (km)
+  * - Mercury
+    - 4
+    - 1
+    - 300
+  * - Venus
+    - 5
+    - 1
+    - 800
+  * - EMB
+    - 6
+    - 1
+    - 1000
+  * - Mars
+    - 17
+    - 1
+    - 7700
+  * - Jupiter
+    - 71
+    - 5
+    - 76000
+  * - Saturn
+    - 81
+    - 13
+    - 267000
+  * - Uranus
+    - 86
+    - 7
+    - 712000
+  * - Neptune
+    - 11
+    - 1
+    - 253000

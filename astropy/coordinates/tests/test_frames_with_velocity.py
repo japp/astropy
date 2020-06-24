@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-
 import pytest
 import numpy as np
 
 from astropy import units as u
-from astropy.coordinates.builtin_frames import ICRS, Galactic, Galactocentric
+from astropy.coordinates.builtin_frames import CIRS, ICRS, Galactic, Galactocentric
 from astropy.coordinates import builtin_frames as bf
+from astropy.coordinates import galactocentric_frame_defaults
 from astropy.units import allclose as quantity_allclose
 from astropy.coordinates.errors import ConvertError
 from astropy.coordinates import representation as r
@@ -15,22 +15,23 @@ from astropy.coordinates import representation as r
 
 def test_api():
     # transform observed Barycentric velocities to full-space Galactocentric
-    gc_frame = Galactocentric()
-    icrs = ICRS(ra=151.*u.deg, dec=-16*u.deg, distance=101*u.pc,
-                pm_ra_cosdec=21*u.mas/u.yr, pm_dec=-71*u.mas/u.yr,
-                radial_velocity=71*u.km/u.s)
-    icrs.transform_to(gc_frame)
+    with galactocentric_frame_defaults.set('latest'):
+        gc_frame = Galactocentric()
+        icrs = ICRS(ra=151.*u.deg, dec=-16*u.deg, distance=101*u.pc,
+                    pm_ra_cosdec=21*u.mas/u.yr, pm_dec=-71*u.mas/u.yr,
+                    radial_velocity=71*u.km/u.s)
+        icrs.transform_to(gc_frame)
 
-    # transform a set of ICRS proper motions to Galactic
-    icrs = ICRS(ra=151.*u.deg, dec=-16*u.deg,
-                pm_ra_cosdec=21*u.mas/u.yr, pm_dec=-71*u.mas/u.yr)
-    icrs.transform_to(Galactic)
+        # transform a set of ICRS proper motions to Galactic
+        icrs = ICRS(ra=151.*u.deg, dec=-16*u.deg,
+                    pm_ra_cosdec=21*u.mas/u.yr, pm_dec=-71*u.mas/u.yr)
+        icrs.transform_to(Galactic)
 
-    # transform a Barycentric RV to a GSR RV
-    icrs = ICRS(ra=151.*u.deg, dec=-16*u.deg, distance=1.*u.pc,
-                pm_ra_cosdec=0*u.mas/u.yr, pm_dec=0*u.mas/u.yr,
-                radial_velocity=71*u.km/u.s)
-    icrs.transform_to(Galactocentric)
+        # transform a Barycentric RV to a GSR RV
+        icrs = ICRS(ra=151.*u.deg, dec=-16*u.deg, distance=1.*u.pc,
+                    pm_ra_cosdec=0*u.mas/u.yr, pm_dec=0*u.mas/u.yr,
+                    radial_velocity=71*u.km/u.s)
+        icrs.transform_to(Galactocentric)
 
 
 all_kwargs = [
@@ -178,15 +179,15 @@ def test_frame_affinetransform(kwargs, expect_success):
     an AffineTransform fails without full-space data, but this just checks that
     things work as expected at the frame level as well.
     """
+    with galactocentric_frame_defaults.set('latest'):
+        icrs = ICRS(**kwargs)
 
-    icrs = ICRS(**kwargs)
+        if expect_success:
+            _ = icrs.transform_to(Galactocentric)
 
-    if expect_success:
-        gc = icrs.transform_to(Galactocentric)
-
-    else:
-        with pytest.raises(ConvertError):
-            icrs.transform_to(Galactocentric)
+        else:
+            with pytest.raises(ConvertError):
+                icrs.transform_to(Galactocentric)
 
 
 def test_differential_type_arg():
@@ -307,3 +308,21 @@ def test_negative_distance():
              distance=(-10*u.mas).to(u.pc, u.parallax()))
     assert quantity_allclose(c.ra, RA)
     assert quantity_allclose(c.dec, DEC)
+
+
+def test_velocity_units():
+    """Check that the differential data given has compatible units
+    with the time-derivative of representation data"""
+    with pytest.raises(ValueError) as excinfo:
+        c = ICRS(
+            x=1, y=2, z=3,
+            v_x=1, v_y=2, v_z=3,
+            representation_type=r.CartesianRepresentation,
+            differential_type=r.CartesianDifferential)
+    assert "data units are not compatible with" in str(excinfo.value)
+
+
+def test_frame_with_velocity_without_distance_can_be_transformed():
+    frame = CIRS(1*u.deg, 2*u.deg, pm_dec=1*u.mas/u.yr, pm_ra_cosdec=2*u.mas/u.yr)
+    rep = frame.transform_to(ICRS)
+    assert "<ICRS Coordinate: (ra, dec, distance) in" in repr(rep)

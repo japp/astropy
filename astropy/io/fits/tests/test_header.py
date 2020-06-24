@@ -2371,12 +2371,23 @@ class TestHeaderFunctions(FitsTestCase):
         assert pri_hdr == pri_hdr_from_bytes
         assert pri_hdr.tostring() == pri_hdr_from_bytes.tostring()
 
+    def test_set_keyword_with_space(self):
+        """
+        Regression test for https://github.com/astropy/astropy/issues/10479
+        """
+        hdr = fits.Header()
+        hdr['KEY2 '] = 2
+        hdr['KEY2  '] = 4
+        assert len(hdr) == 1
+        assert hdr['KEY2'] == 4
+        assert hdr['KEY2 '] == 4
+
 
 class TestRecordValuedKeywordCards(FitsTestCase):
     """
     Tests for handling of record-valued keyword cards as used by the
     `FITS WCS distortion paper
-    <http://www.atnf.csiro.au/people/mcalabre/WCS/dcs_20040422.pdf>`__.
+    <https://www.atnf.csiro.au/people/mcalabre/WCS/dcs_20040422.pdf>`__.
 
     These tests are derived primarily from the release notes for PyFITS 1.4 (in
     which this feature was first introduced.
@@ -2838,3 +2849,36 @@ class TestRecordValuedKeywordCards(FitsTestCase):
         with open(self.temp('mode.fits'), mode=mode) as ff:
             hdu = fits.ImageHDU(data=np.ones(5))
             hdu.writeto(ff)
+
+
+def test_subclass():
+    """Check that subclasses don't get ignored on slicing and copying."""
+    class MyHeader(fits.Header):
+        def append(self, card, *args, **kwargs):
+            if isinstance(card, tuple) and len(card) == 2:
+                # Just for our checks we add a comment if there is none.
+                card += ('no comment',)
+
+            return super().append(card, *args, **kwargs)
+
+    my_header = MyHeader((('a', 1., 'first'),
+                          ('b', 2., 'second'),
+                          ('c', 3.,)))
+
+    assert my_header.comments['a'] == 'first'
+    assert my_header.comments['b'] == 'second'
+    assert my_header.comments['c'] == 'no comment'
+
+    slice_ = my_header[1:]
+    assert type(slice_) is MyHeader
+    assert slice_.comments['b'] == 'second'
+    assert slice_.comments['c'] == 'no comment'
+    selection = my_header['c*']
+    assert type(selection) is MyHeader
+    assert selection.comments['c'] == 'no comment'
+    copy_ = my_header.copy()
+    assert type(copy_) is MyHeader
+    assert copy_.comments['b'] == 'second'
+    assert copy_.comments['c'] == 'no comment'
+    my_header.extend((('d', 4.),))
+    assert my_header.comments['d'] == 'no comment'

@@ -6,31 +6,21 @@ Python. It also provides an index for other astronomy packages and tools for
 managing them.
 """
 
-# Prior to Astropy 3.2, astropy was imported during setup.py commands. If we are
-# in setup mode, then astropy-helpers defines an _ASTROPY_SETUP_ variable, which
-# we used to use to conditionally import C extensions for example. However, the
-# behavior of importing the package during the setup process is not good
-# practice and we therefore now explicitly prevent the package from being
-# imported in that case to prevent any regressions. We use _ASTROPY_CORE_SETUP_
-# (defined in setup.py) rather than _ASTROPY_SETUP_ since the latter is also
-# set up for affiliated packages, and those need to be able to import the
-# (installed) core package during e.g. python setup.py test.
-try:
-    _ASTROPY_CORE_SETUP_
-except NameError:
-    pass
-else:
-    raise RuntimeError("The astropy package cannot be imported during setup")
-
 import sys
 import os
 from warnings import warn
 
+from .version import version as __version__
+
 __minimum_python_version__ = '3.6'
-__minimum_numpy_version__ = '1.13.0'
+__minimum_numpy_version__ = '1.16.0'
+__minimum_scipy_version__ = '0.18'
 # ASDF is an optional dependency, but this is the minimum version that is
 # compatible with Astropy when it is installed.
-__minimum_asdf_version__ = '2.3.0'
+__minimum_asdf_version__ = '2.6.0'
+# PyYAML is an optional dependency, but this is the minimum version that is
+# advertised to be supported.
+__minimum_yaml_version__ = '3.12'
 
 
 class UnsupportedPythonError(Exception):
@@ -75,18 +65,6 @@ def _is_astropy_setup():
             _is_astropy_source(main_mod.__file__))
 
 
-try:
-    from .version import version as __version__
-except ImportError:
-    # TODO: Issue a warning using the logging framework
-    __version__ = ''
-try:
-    from .version import githash as __githash__
-except ImportError:
-    # TODO: Issue a warning using the logging framework
-    __githash__ = ''
-
-
 # The location of the online documentation for astropy
 # This location will normally point to the current released version of astropy
 if 'dev' in __version__:
@@ -103,18 +81,18 @@ def _check_numpy():
     # Note: We could have used distutils.version for this comparison,
     # but it seems like overkill to import distutils at runtime.
     requirement_met = False
-
+    import_fail = ''
     try:
         import numpy
     except ImportError:
-        pass
+        import_fail = 'Numpy is not installed.'
     else:
         from .utils import minversion
         requirement_met = minversion(numpy, __minimum_numpy_version__)
 
     if not requirement_met:
-        msg = ("Numpy version {} or later must be installed to use "
-               "Astropy".format(__minimum_numpy_version__))
+        msg = (f"Numpy version {__minimum_numpy_version__} or later must "
+               f"be installed to use Astropy. {import_fail}")
         raise ImportError(msg)
 
     return numpy
@@ -348,7 +326,7 @@ def _get_bibtex():
     with open(citation_file, 'r') as citation:
         refs = citation.read().split('@ARTICLE')[1:]
         if len(refs) == 0: return ''
-        bibtexreference = "@ARTICLE{}".format(refs[0])
+        bibtexreference = f'@ARTICLE{refs[0]}'
     return bibtexreference
 
 
@@ -389,9 +367,7 @@ def online_help(query):
     else:
         version = 'v' + version
 
-    url = 'http://docs.astropy.org/en/{}/search.html?{}'.format(
-        version, urlencode({'q': query}))
-
+    url = f"http://docs.astropy.org/en/{version}/search.html?{urlencode({'q': query})}"
     webbrowser.open(url)
 
 

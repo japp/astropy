@@ -4,12 +4,12 @@ used to represent low-level cartesian, spherical, cylindrical, and other
 coordinates.
 """
 
-
 import abc
 import functools
 import operator
 from collections import OrderedDict
 import inspect
+import warnings
 
 import numpy as np
 import astropy.units as u
@@ -18,7 +18,9 @@ from .angles import Angle, Longitude, Latitude
 from .distances import Distance
 from astropy._erfa import ufunc as erfa_ufunc
 from astropy.utils import ShapedLikeNDArray, classproperty
-from astropy.utils.compat import NUMPY_LT_1_14
+from astropy.utils.data_info import MixinInfo
+from astropy.utils.exceptions import DuplicateRepresentationWarning
+
 
 __all__ = ["BaseRepresentationOrDifferential", "BaseRepresentation",
            "CartesianRepresentation", "SphericalRepresentation",
@@ -36,9 +38,16 @@ __all__ = ["BaseRepresentationOrDifferential", "BaseRepresentation",
 # classes get registered automatically.
 REPRESENTATION_CLASSES = {}
 DIFFERENTIAL_CLASSES = {}
+# set for tracking duplicates
+DUPLICATE_REPRESENTATIONS = set()
 
 # a hash for the content of the above two dicts, cached for speed.
 _REPRDIFF_HASH = None
+
+
+def _fqn_class(cls):
+    ''' Get the fully qualified name of a class '''
+    return cls.__module__ + '.' + cls.__qualname__
 
 
 def get_reprdiff_cls_hash():
@@ -50,7 +59,7 @@ def get_reprdiff_cls_hash():
     global _REPRDIFF_HASH
     if _REPRDIFF_HASH is None:
         _REPRDIFF_HASH = (hash(tuple(REPRESENTATION_CLASSES.items())) +
-                          hash(tuple(DIFFERENTIAL_CLASSES.items())) )
+                          hash(tuple(DIFFERENTIAL_CLASSES.items())))
     return _REPRDIFF_HASH
 
 
@@ -63,8 +72,6 @@ def _array2string(values, prefix=''):
     # Work around version differences for array2string.
     kwargs = {'separator': ', ', 'prefix': prefix}
     kwargs['formatter'] = {}
-    if NUMPY_LT_1_14:  # in 1.14, style is no longer used (and deprecated)
-        kwargs['style'] = repr
 
     return np.array2string(values, **kwargs)
 
@@ -99,6 +106,90 @@ def _combine_xyz(x, y, z, xyz_axis=0):
     return cls(xyz, unit=unit, copy=False)
 
 
+class BaseRepresentationOrDifferentialInfo(MixinInfo):
+    """
+    Container for meta information like name, description, format.  This is
+    required when the object is used as a mixin column within a table, but can
+    be used as a general way to store meta information.
+    """
+    attrs_from_parent = {'unit'}  # Indicates unit is read-only
+    _supports_indexing = False
+
+    @staticmethod
+    def default_format(val):
+        # Create numpy dtype so that numpy formatting will work.
+        components = val.components
+        values = tuple(getattr(val, component).value for component in components)
+        a = np.empty(getattr(val, 'shape', ()),
+                     [(component, value.dtype) for component, value
+                      in zip(components, values)])
+        for component, value in zip(components, values):
+            a[component] = value
+        return str(a)
+
+    @property
+    def _represent_as_dict_attrs(self):
+        return self._parent.components
+
+    @property
+    def unit(self):
+        if self._parent is None:
+            return None
+
+        unit = self._parent._unitstr
+        return unit[1:-1] if unit.startswith('(') else unit
+
+    def new_like(self, reps, length, metadata_conflicts='warn', name=None):
+        """
+        Return a new instance like ``reps`` with ``length`` rows.
+
+        This is intended for creating an empty column object whose elements can
+        be set in-place for table operations like join or vstack.
+
+        Parameters
+        ----------
+        reps : list
+            List of input representations or differentials.
+        length : int
+            Length of the output column object
+        metadata_conflicts : str ('warn'|'error'|'silent')
+            How to handle metadata conflicts
+        name : str
+            Output column name
+
+        Returns
+        -------
+        col : Representation or Differential
+            Empty instance of this class consistent with ``cols``
+
+        """
+
+        # Get merged info attributes like shape, dtype, format, description, etc.
+        attrs = self.merge_cols_attributes(reps, metadata_conflicts, name,
+                                           ('meta', 'description'))
+        # Make a new representation or differential with the desired length
+        # using the _apply / __getitem__ machinery to effectively return
+        # rep0[[0, 0, ..., 0, 0]]. This will have the right shape, and
+        # include possible differentials.
+        indexes = np.zeros(length, dtype=np.int64)
+        out = reps[0][indexes]
+
+        # Use __setitem__ machinery to check whether all representations
+        # can represent themselves as this one without loss of information.
+        for rep in reps[1:]:
+            try:
+                out[0] = rep[0]
+            except Exception as err:
+                raise ValueError(f'input representations are inconsistent: {err}')
+
+        # Set (merged) info attributes.
+        for attr in ('name', 'meta', 'description'):
+            if attr in attrs:
+                setattr(out.info, attr, attrs[attr])
+
+        return out
+
+
 class BaseRepresentationOrDifferential(ShapedLikeNDArray):
     """3D coordinate representations and differentials.
 
@@ -108,40 +199,65 @@ class BaseRepresentationOrDifferential(ShapedLikeNDArray):
         The components of the 3D point or differential.  The names are the
         keys and the subclasses the values of the ``attr_classes`` attribute.
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied; if `False`, they will be
+        broadcast together but not use new memory.
     """
 
     # Ensure multiplication/division with ndarray or Quantity doesn't lead to
     # object arrays.
     __array_priority__ = 50000
 
+    info = BaseRepresentationOrDifferentialInfo()
+
     def __init__(self, *args, **kwargs):
         # make argument a list, so we can pop them off.
         args = list(args)
         components = self.components
-        attrs = []
-        for component in components:
-            try:
-                attrs.append(args.pop(0) if args else kwargs.pop(component))
-            except KeyError:
-                raise TypeError('__init__() missing 1 required positional '
-                                'argument: {!r}'.format(component))
+        if (args and isinstance(args[0], self.__class__)
+                and all(arg is None for arg in args[1:])):
+            rep_or_diff = args[0]
+            copy = kwargs.pop('copy', True)
+            attrs = [getattr(rep_or_diff, component)
+                     for component in components]
+            if 'info' in rep_or_diff.__dict__:
+                self.info = rep_or_diff.info
 
-        copy = args.pop(0) if args else kwargs.pop('copy', True)
+            if kwargs:
+                raise TypeError(f'unexpected keyword arguments for case '
+                                f'where class instance is passed in: {kwargs}')
 
-        if args:
-            raise TypeError(f'unexpected arguments: {args}')
-
-        if kwargs:
+        else:
+            attrs = []
             for component in components:
-                if component in kwargs:
-                    raise TypeError("__init__() got multiple values for "
-                                    "argument {!r}".format(component))
+                try:
+                    attr = args.pop(0) if args else kwargs.pop(component)
+                except KeyError:
+                    raise TypeError(f'__init__() missing 1 required positional '
+                                    f'argument: {component!r}')
 
-            raise TypeError(f'unexpected keyword arguments: {kwargs}')
+                if attr is None:
+                    raise TypeError(f'__init__() missing 1 required positional '
+                                    f'argument: {component!r} (or first '
+                                    f'argument should be an instance of '
+                                    f'{self.__class__.__name__}).')
+
+                attrs.append(attr)
+
+            copy = args.pop(0) if args else kwargs.pop('copy', True)
+
+            if args:
+                raise TypeError(f'unexpected arguments: {args}')
+
+            if kwargs:
+                for component in components:
+                    if component in kwargs:
+                        raise TypeError(f"__init__() got multiple values for "
+                                        f"argument {component!r}")
+
+                raise TypeError(f'unexpected keyword arguments: {kwargs}')
 
         # Pass attributes through the required initializing classes.
-        attrs = [self.attr_classes[component](attr, copy=copy)
+        attrs = [self.attr_classes[component](attr, copy=False)
                  for component, attr in zip(components, attrs)]
         try:
             attrs = np.broadcast_arrays(*attrs, subok=True)
@@ -152,6 +268,10 @@ class BaseRepresentationOrDifferential(ShapedLikeNDArray):
                 c_str = ', '.join(components[:2]) + ', and ' + components[2]
             raise ValueError("Input parameters {} cannot be broadcast"
                              .format(c_str))
+
+        if copy:
+            attrs = [attr.copy() for attr in attrs]
+
         # Set private attributes for the attributes. (If not defined explicitly
         # on the class, the metaclass will define properties to access these.)
         for component, attr in zip(components, attrs):
@@ -213,6 +333,31 @@ class BaseRepresentationOrDifferential(ShapedLikeNDArray):
         """A tuple with the in-order names of the coordinate components."""
         return tuple(self.attr_classes)
 
+    def __eq__(self, value):
+        """Equality operator
+
+        This implements strict equality and requires that the representation
+        classes are identical and that the representation data are exactly equal.
+        """
+        if self.__class__ is not value.__class__:
+            raise TypeError(f'cannot compare: objects must have same class: '
+                            f'{self.__class__.__name__} vs. '
+                            f'{value.__class__.__name__}')
+
+        try:
+            np.broadcast(self, value)
+        except ValueError as exc:
+            raise ValueError(f'cannot compare: {exc}') from exc
+
+        out = True
+        for comp in self.components:
+            out &= (getattr(self, '_' + comp) == getattr(value, '_' + comp))
+
+        return out
+
+    def __ne__(self, value):
+        return np.logical_not(self == value)
+
     def _apply(self, method, *args, **kwargs):
         """Create a new representation or differential with ``method`` applied
         to the component data.
@@ -220,7 +365,7 @@ class BaseRepresentationOrDifferential(ShapedLikeNDArray):
         In typical usage, the method is any of the shape-changing methods for
         `~numpy.ndarray` (``reshape``, ``swapaxes``, etc.), as well as those
         picking particular elements (``__getitem__``, ``take``, etc.), which
-        are all defined in `~astropy.utils.misc.ShapedLikeNDArray`. It will be
+        are all defined in `~astropy.utils.shapes.ShapedLikeNDArray`. It will be
         applied to the underlying arrays (e.g., ``x``, ``y``, and ``z`` for
         `~astropy.coordinates.CartesianRepresentation`), with the results used
         to create a new instance.
@@ -247,7 +392,23 @@ class BaseRepresentationOrDifferential(ShapedLikeNDArray):
         for component in self.components:
             setattr(new, '_' + component,
                     apply_method(getattr(self, component)))
+
+        # Copy other 'info' attr only if it has actually been defined.
+        # See PR #3898 for further explanation and justification, along
+        # with Quantity.__array_finalize__
+        if 'info' in self.__dict__:
+            new.info = self.info
+
         return new
+
+    def __setitem__(self, item, value):
+        if value.__class__ is not self.__class__:
+            raise TypeError(f'can only set from object of same class: '
+                            f'{self.__class__.__name__} vs. '
+                            f'{value.__class__.__name__}')
+
+        for component in self.components:
+            getattr(self, '_' + component)[item] = getattr(value, '_' + component)
 
     @property
     def shape(self):
@@ -261,6 +422,8 @@ class BaseRepresentationOrDifferential(ShapedLikeNDArray):
 
         Raises
         ------
+        ValueError
+            If the new shape has the wrong total number of elements.
         AttributeError
             If the shape of any of the components cannot be changed without the
             arrays being copied.  For these cases, use the ``reshape`` method
@@ -280,7 +443,7 @@ class BaseRepresentationOrDifferential(ShapedLikeNDArray):
             if val.size > 1:
                 try:
                     val.shape = shape
-                except AttributeError:
+                except Exception:
                     for val2 in reshaped:
                         val2.shape = oldshape
                     raise
@@ -413,10 +576,35 @@ class MetaBaseRepresentation(abc.ABCMeta):
                                       '"attr_classes" class attribute.')
 
         repr_name = cls.get_name()
-
+        # first time a duplicate is added
+        # remove first entry and add both using their qualnames
         if repr_name in REPRESENTATION_CLASSES:
-            raise ValueError("Representation class {} already defined"
-                             .format(repr_name))
+            DUPLICATE_REPRESENTATIONS.add(repr_name)
+
+            fqn_cls = _fqn_class(cls)
+            existing = REPRESENTATION_CLASSES[repr_name]
+            fqn_existing = _fqn_class(existing)
+
+            if fqn_cls == fqn_existing:
+                raise ValueError(f'Representation "{fqn_cls}" already defined')
+
+            msg = (
+                'Representation "{}" already defined, removing it to avoid confusion.'
+                'Use qualnames "{}" and "{}" or class instaces directly'
+            ).format(repr_name, fqn_cls, fqn_existing)
+            warnings.warn(msg, DuplicateRepresentationWarning)
+
+            del REPRESENTATION_CLASSES[repr_name]
+            REPRESENTATION_CLASSES[fqn_existing] = existing
+            repr_name = fqn_cls
+        # further definitions with the same name, just add qualname
+        elif repr_name in DUPLICATE_REPRESENTATIONS:
+            warnings.warn('Representation "{}" already defined, using qualname "{}".')
+            repr_name = _fqn_class(cls)
+            if repr_name in REPRESENTATION_CLASSES:
+                raise ValueError(
+                    f'Representation "{repr_name}" already defined'
+                )
 
         REPRESENTATION_CLASSES[repr_name] = cls
         _invalidate_reprdiff_cls_hash()
@@ -428,6 +616,30 @@ class MetaBaseRepresentation(abc.ABCMeta):
                         property(_make_getter(component),
                                  doc=("The '{}' component of the points(s)."
                                       .format(component))))
+
+
+class RepresentationInfo(BaseRepresentationOrDifferentialInfo):
+
+    @property
+    def _represent_as_dict_attrs(self):
+        attrs = super()._represent_as_dict_attrs
+        if self._parent._differentials:
+            attrs += ('differentials',)
+        return attrs
+
+    def _represent_as_dict(self, attrs=None):
+        out = super()._represent_as_dict(attrs)
+        for key, value in out.pop('differentials', {}).items():
+            out[f'differentials.{key}'] = value
+        return out
+
+    def _construct_from_dict(self, map):
+        differentials = {}
+        for key in list(map.keys()):
+            if key.startswith('differentials.'):
+                differentials[key[14:]] = map.pop(key)
+        map['differentials'] = differentials
+        return super()._construct_from_dict(map)
 
 
 class BaseRepresentation(BaseRepresentationOrDifferential,
@@ -448,7 +660,8 @@ class BaseRepresentation(BaseRepresentationOrDifferential,
         representation, the key would be ``'s'`` for seconds, indicating that
         the derivative is a time derivative.
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
 
     Notes
     -----
@@ -463,9 +676,14 @@ class BaseRepresentation(BaseRepresentationOrDifferential,
     methods (see those methods for details).
     """
 
+    info = RepresentationInfo()
+
     def __init__(self, *args, differentials=None, **kwargs):
         # Handle any differentials passed in.
         super().__init__(*args, **kwargs)
+        if (differentials is None
+                and args and isinstance(args[0], self.__class__)):
+            differentials = args[0]._differentials
         self._differentials = self._validate_differentials(differentials)
 
     def _validate_differentials(self, differentials):
@@ -609,13 +827,13 @@ class BaseRepresentation(BaseRepresentationOrDifferential,
                 list(self.differentials.keys())[0]: differential_class
             }
 
-        elif set(differential_class.keys()) != set(self.differentials.keys()):
-            ValueError("Desired differential classes must be passed in "
-                       "as a dictionary with keys equal to a string "
-                       "representation of the unit of the derivative "
-                       "for each differential stored with this "
-                       "representation object ({})"
-                       .format(self.differentials))
+        elif differential_class.keys() != self.differentials.keys():
+            raise ValueError("Desired differential classes must be passed in "
+                             "as a dictionary with keys equal to a string "
+                             "representation of the unit of the derivative "
+                             "for each differential stored with this "
+                             "representation object ({0})"
+                             .format(self.differentials))
 
         new_diffs = dict()
         for k in self.differentials:
@@ -732,6 +950,30 @@ class BaseRepresentation(BaseRepresentationOrDifferential,
         """
         return representation.represent_as(cls)
 
+    def __eq__(self, value):
+        """Equality operator for BaseRepresentation
+
+        This implements strict equality and requires that the representation
+        classes are identical, the differentials are identical, and that the
+        representation data are exactly equal.
+        """
+        # BaseRepresentationOrDifferental (checks classes and compares components)
+        out = super().__eq__(value)
+
+        # super() checks that the class is identical so can this even happen?
+        # (same class, different differentials ?)
+        if self._differentials.keys() != value._differentials.keys():
+            raise ValueError(f'cannot compare: objects must have same differentials')
+
+        for self_diff, value_diff in zip(self._differentials.values(),
+                                         value._differentials.values()):
+            out &= (self_diff == value_diff)
+
+        return out
+
+    def __ne__(self, value):
+        return np.logical_not(self == value)
+
     def _apply(self, method, *args, **kwargs):
         """Create a new representation with ``method`` applied to the component
         data.
@@ -759,6 +1001,37 @@ class BaseRepresentation(BaseRepresentationOrDifferential,
             [(k, diff._apply(method, *args, **kwargs))
              for k, diff in self._differentials.items()])
         return rep
+
+    def __setitem__(self, item, value):
+        if not isinstance(value, BaseRepresentation):
+            raise TypeError(f'value must be a representation instance, '
+                            f'not {type(value)}.')
+
+        if not (isinstance(value, self.__class__)
+                or len(value.attr_classes) == len(self.attr_classes)):
+            raise ValueError(
+                f'value must be representable as {self.__class__.__name__} '
+                f'without loss of information.')
+
+        diff_classes = {}
+        if self._differentials:
+            if self._differentials.keys() != value._differentials.keys():
+                raise ValueError('value must have the same differentials.')
+
+            for key, self_diff in self._differentials.items():
+                diff_classes[key] = self_diff_cls = self_diff.__class__
+                value_diff_cls = value._differentials[key].__class__
+                if not (isinstance(value_diff_cls, self_diff_cls)
+                        or (len(value_diff_cls.attr_classes)
+                            == len(self_diff_cls.attr_classes))):
+                    raise ValueError(
+                        f'value differential {key!r} must be representable as '
+                        f'{self_diff.__class__.__name__} without loss of information.')
+
+        value = value.represent_as(self.__class__, diff_classes)
+        super().__setitem__(item, value)
+        for key, differential in self._differentials.items():
+            differential[item] = value._differentials[key]
 
     def _scale_operation(self, op, *args):
         """Scale all non-angular components, leaving angular ones unchanged.
@@ -962,7 +1235,8 @@ class CartesianRepresentation(BaseRepresentation):
         time derivative.
 
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
 
     attr_classes = OrderedDict([('x', u.Quantity),
@@ -990,6 +1264,14 @@ class CartesianRepresentation(BaseRepresentation):
                 self._x, self._y, self._z = x
                 self._differentials = self._validate_differentials(differentials)
                 return
+
+            elif (isinstance(x, CartesianRepresentation)
+                  and unit is None and xyz_axis is None):
+                if differentials is None:
+                    differentials = x._differentials
+
+                return super().__init__(x, differentials=differentials,
+                                        copy=copy)
 
             else:
                 x, y, z = x
@@ -1246,7 +1528,8 @@ class UnitSphericalRepresentation(BaseRepresentation):
         the derivative is a time derivative.
 
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
 
     attr_classes = OrderedDict([('lon', Longitude),
@@ -1256,7 +1539,7 @@ class UnitSphericalRepresentation(BaseRepresentation):
     def _dimensional_representation(cls):
         return SphericalRepresentation
 
-    def __init__(self, lon, lat, differentials=None, copy=True):
+    def __init__(self, lon, lat=None, differentials=None, copy=True):
         super().__init__(lon, lat, differentials=differentials, copy=copy)
 
     @property
@@ -1445,13 +1728,14 @@ class RadialRepresentation(BaseRepresentation):
         the derivative is a time derivative.
 
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
 
     attr_classes = OrderedDict([('distance', u.Quantity)])
 
     def __init__(self, distance, differentials=None, copy=True):
-        super().__init__(distance, copy=copy, differentials=differentials)
+        super().__init__(distance, differentials=differentials, copy=copy)
 
     @property
     def distance(self):
@@ -1530,7 +1814,8 @@ class SphericalRepresentation(BaseRepresentation):
         the derivative is a time derivative.
 
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
 
     attr_classes = OrderedDict([('lon', Longitude),
@@ -1538,7 +1823,8 @@ class SphericalRepresentation(BaseRepresentation):
                                 ('distance', u.Quantity)])
     _unit_representation = UnitSphericalRepresentation
 
-    def __init__(self, lon, lat, distance, differentials=None, copy=True):
+    def __init__(self, lon, lat=None, distance=None, differentials=None,
+                 copy=True):
         super().__init__(lon, lat, distance, copy=copy,
                          differentials=differentials)
         if self._distance.unit.physical_type == 'length':
@@ -1692,14 +1978,15 @@ class PhysicsSphericalRepresentation(BaseRepresentation):
         derivative.
 
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
 
     attr_classes = OrderedDict([('phi', Angle),
                                 ('theta', Angle),
                                 ('r', u.Quantity)])
 
-    def __init__(self, phi, theta, r, differentials=None, copy=True):
+    def __init__(self, phi, theta=None, r=None, differentials=None, copy=True):
         super().__init__(phi, theta, r, copy=copy, differentials=differentials)
 
         # Wrap/validate phi/theta
@@ -1847,14 +2134,15 @@ class CylindricalRepresentation(BaseRepresentation):
         derivative.
 
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
 
     attr_classes = OrderedDict([('rho', u.Quantity),
                                 ('phi', Angle),
                                 ('z', u.Quantity)])
 
-    def __init__(self, rho, phi, z, differentials=None, copy=True):
+    def __init__(self, rho, phi=None, z=None, differentials=None, copy=True):
         super().__init__(rho, phi, z, copy=copy, differentials=differentials)
 
         if not self._rho.unit.is_equivalent(self._z.unit):
@@ -1976,7 +2264,8 @@ class BaseDifferential(BaseRepresentationOrDifferential,
         The components of the 3D differentials.  The names are the keys and the
         subclasses the values of the ``attr_classes`` attribute.
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
 
     Notes
     -----
@@ -2015,7 +2304,7 @@ class BaseDifferential(BaseRepresentationOrDifferential,
                 # This is quite a bit faster than using to_system() or going
                 # through Quantity()
                 d_unit_si = d_unit.decompose(u.si.bases)
-                d_unit_si._scale = 1 # remove the scale from the unit
+                d_unit_si._scale = 1  # remove the scale from the unit
 
                 return str(d_unit_si)
 
@@ -2227,7 +2516,8 @@ class CartesianDifferential(BaseDifferential):
         The axis along which the coordinates are stored when a single array is
         provided instead of distinct ``d_x``, ``d_y``, and ``d_z`` (default: 0).
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
     base_representation = CartesianRepresentation
     _d_xyz = None
@@ -2380,7 +2670,8 @@ class UnitSphericalDifferential(BaseSphericalDifferential):
     d_lon, d_lat : `~astropy.units.Quantity`
         The longitude and latitude of the differentials.
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
     base_representation = UnitSphericalRepresentation
 
@@ -2388,7 +2679,7 @@ class UnitSphericalDifferential(BaseSphericalDifferential):
     def _dimensional_differential(cls):
         return SphericalDifferential
 
-    def __init__(self, d_lon, d_lat, copy=True):
+    def __init__(self, d_lon, d_lat=None, copy=True):
         super().__init__(d_lon, d_lat, copy=copy)
         if not self._d_lon.unit.is_equivalent(self._d_lat.unit):
             raise u.UnitsError('d_lon and d_lat should have equivalent units.')
@@ -2437,12 +2728,13 @@ class SphericalDifferential(BaseSphericalDifferential):
     d_distance : `~astropy.units.Quantity`
         The differential distance.
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
     base_representation = SphericalRepresentation
     _unit_differential = UnitSphericalDifferential
 
-    def __init__(self, d_lon, d_lat, d_distance, copy=True):
+    def __init__(self, d_lon, d_lat=None, d_distance=None, copy=True):
         super().__init__(d_lon, d_lat, d_distance, copy=copy)
         if not self._d_lon.unit.is_equivalent(self._d_lat.unit):
             raise u.UnitsError('d_lon and d_lat should have equivalent units.')
@@ -2576,7 +2868,8 @@ class UnitSphericalCosLatDifferential(BaseSphericalCosLatDifferential):
     d_lon_coslat, d_lat : `~astropy.units.Quantity`
         The longitude and latitude of the differentials.
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
     base_representation = UnitSphericalRepresentation
     attr_classes = OrderedDict([('d_lon_coslat', u.Quantity),
@@ -2586,7 +2879,7 @@ class UnitSphericalCosLatDifferential(BaseSphericalCosLatDifferential):
     def _dimensional_differential(cls):
         return SphericalCosLatDifferential
 
-    def __init__(self, d_lon_coslat, d_lat, copy=True):
+    def __init__(self, d_lon_coslat, d_lat=None, copy=True):
         super().__init__(d_lon_coslat, d_lat, copy=copy)
         if not self._d_lon_coslat.unit.is_equivalent(self._d_lat.unit):
             raise u.UnitsError('d_lon_coslat and d_lat should have equivalent '
@@ -2637,7 +2930,8 @@ class SphericalCosLatDifferential(BaseSphericalCosLatDifferential):
     d_distance : `~astropy.units.Quantity`
         The differential distance.
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
     base_representation = SphericalRepresentation
     _unit_differential = UnitSphericalCosLatDifferential
@@ -2645,7 +2939,7 @@ class SphericalCosLatDifferential(BaseSphericalCosLatDifferential):
                                 ('d_lat', u.Quantity),
                                 ('d_distance', u.Quantity)])
 
-    def __init__(self, d_lon_coslat, d_lat, d_distance, copy=True):
+    def __init__(self, d_lon_coslat, d_lat=None, d_distance=None, copy=True):
         super().__init__(d_lon_coslat, d_lat, d_distance, copy=copy)
         if not self._d_lon_coslat.unit.is_equivalent(self._d_lat.unit):
             raise u.UnitsError('d_lon_coslat and d_lat should have equivalent '
@@ -2691,7 +2985,8 @@ class RadialDifferential(BaseDifferential):
     d_distance : `~astropy.units.Quantity`
         The differential distance.
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
     base_representation = RadialRepresentation
 
@@ -2743,11 +3038,12 @@ class PhysicsSphericalDifferential(BaseDifferential):
     d_r : `~astropy.units.Quantity`
         The differential radial distance.
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
     base_representation = PhysicsSphericalRepresentation
 
-    def __init__(self, d_phi, d_theta, d_r, copy=True):
+    def __init__(self, d_phi, d_theta=None, d_r=None, copy=True):
         super().__init__(d_phi, d_theta, d_r, copy=copy)
         if not self._d_phi.unit.is_equivalent(self._d_theta.unit):
             raise u.UnitsError('d_phi and d_theta should have equivalent '
@@ -2802,11 +3098,12 @@ class CylindricalDifferential(BaseDifferential):
     d_z : `~astropy.units.Quantity`
         The differential height.
     copy : bool, optional
-        If `True` (default), arrays will be copied rather than referenced.
+        If `True` (default), arrays will be copied. If `False`, arrays will
+        be references, though possibly broadcast to ensure matching shapes.
     """
     base_representation = CylindricalRepresentation
 
-    def __init__(self, d_rho, d_phi, d_z, copy=False):
+    def __init__(self, d_rho, d_phi=None, d_z=None, copy=False):
         super().__init__(d_rho, d_phi, d_z, copy=copy)
         if not self._d_rho.unit.is_equivalent(self._d_z.unit):
             raise u.UnitsError("d_rho and d_z should have equivalent units.")

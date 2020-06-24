@@ -8,11 +8,11 @@ from .core import Kernel1D, Kernel2D, Kernel
 from .utils import has_even_axis, raise_even_kernel_exception
 from astropy.modeling import models
 from astropy.modeling.core import Fittable1DModel, Fittable2DModel
-from astropy.utils.decorators import deprecated_renamed_argument
+from astropy.utils.decorators import deprecated
 
 __all__ = ['Gaussian1DKernel', 'Gaussian2DKernel', 'CustomKernel',
            'Box1DKernel', 'Box2DKernel', 'Tophat2DKernel',
-           'Trapezoid1DKernel', 'MexicanHat1DKernel', 'MexicanHat2DKernel',
+           'Trapezoid1DKernel', 'RickerWavelet1DKernel', 'RickerWavelet2DKernel',
            'AiryDisk2DKernel', 'Moffat2DKernel', 'Model1DKernel',
            'Model2DKernel', 'TrapezoidDisk2DKernel', 'Ring2DKernel']
 
@@ -59,7 +59,7 @@ class Gaussian1DKernel(Kernel1D):
 
     See Also
     --------
-    Box1DKernel, Trapezoid1DKernel, MexicanHat1DKernel
+    Box1DKernel, Trapezoid1DKernel, RickerWavelet1DKernel
 
 
     Examples
@@ -101,9 +101,9 @@ class Gaussian2DKernel(Kernel2D):
         Standard deviation of the Gaussian in x before rotating by theta.
     y_stddev : float
         Standard deviation of the Gaussian in y before rotating by theta.
-    theta : float
-        Rotation angle in radians. The rotation angle increases
-        counterclockwise.
+    theta : float or :class:`~astropy.units.Quantity`
+        Rotation angle. If passed as a float, it is assumed to be in radians.
+        The rotation angle increases counterclockwise.
     x_size : odd int, optional
         Size in x direction of the kernel array. Default = 8 * stddev.
     y_size : odd int, optional
@@ -128,7 +128,7 @@ class Gaussian2DKernel(Kernel2D):
 
     See Also
     --------
-    Box2DKernel, Tophat2DKernel, MexicanHat2DKernel, Ring2DKernel,
+    Box2DKernel, Tophat2DKernel, RickerWavelet2DKernel, Ring2DKernel,
     TrapezoidDisk2DKernel, AiryDisk2DKernel, Moffat2DKernel
 
     Examples
@@ -151,7 +151,6 @@ class Gaussian2DKernel(Kernel2D):
     _separable = True
     _is_bool = False
 
-    @deprecated_renamed_argument('stddev', 'x_stddev', '3.0')
     def __init__(self, x_stddev, y_stddev=None, theta=0.0, **kwargs):
         if y_stddev is None:
             y_stddev = x_stddev
@@ -200,7 +199,7 @@ class Box1DKernel(Kernel1D):
 
     See Also
     --------
-    Gaussian1DKernel, Trapezoid1DKernel, MexicanHat1DKernel
+    Gaussian1DKernel, Trapezoid1DKernel, RickerWavelet1DKernel
 
 
     Examples
@@ -268,7 +267,7 @@ class Box2DKernel(Kernel2D):
 
     See Also
     --------
-    Gaussian2DKernel, Tophat2DKernel, MexicanHat2DKernel, Ring2DKernel,
+    Gaussian2DKernel, Tophat2DKernel, RickerWavelet2DKernel, Ring2DKernel,
     TrapezoidDisk2DKernel, AiryDisk2DKernel, Moffat2DKernel
 
     Examples
@@ -333,7 +332,7 @@ class Tophat2DKernel(Kernel2D):
 
     See Also
     --------
-    Gaussian2DKernel, Box2DKernel, MexicanHat2DKernel, Ring2DKernel,
+    Gaussian2DKernel, Box2DKernel, RickerWavelet2DKernel, Ring2DKernel,
     TrapezoidDisk2DKernel, AiryDisk2DKernel, Moffat2DKernel
 
     Examples
@@ -392,7 +391,7 @@ class Ring2DKernel(Kernel2D):
 
     See Also
     --------
-    Gaussian2DKernel, Box2DKernel, Tophat2DKernel, MexicanHat2DKernel,
+    Gaussian2DKernel, Box2DKernel, Tophat2DKernel, RickerWavelet2DKernel,
     Ring2DKernel, AiryDisk2DKernel, Moffat2DKernel
 
     Examples
@@ -450,7 +449,7 @@ class Trapezoid1DKernel(Kernel1D):
 
     See Also
     --------
-    Box1DKernel, Gaussian1DKernel, MexicanHat1DKernel
+    Box1DKernel, Gaussian1DKernel, RickerWavelet1DKernel
 
     Examples
     --------
@@ -508,7 +507,7 @@ class TrapezoidDisk2DKernel(Kernel2D):
 
     See Also
     --------
-    Gaussian2DKernel, Box2DKernel, Tophat2DKernel, MexicanHat2DKernel,
+    Gaussian2DKernel, Box2DKernel, Tophat2DKernel, RickerWavelet2DKernel,
     Ring2DKernel, AiryDisk2DKernel, Moffat2DKernel
 
     Examples
@@ -538,11 +537,12 @@ class TrapezoidDisk2DKernel(Kernel2D):
         self.normalize()
 
 
-class MexicanHat1DKernel(Kernel1D):
+class RickerWavelet1DKernel(Kernel1D):
     """
-    1D Mexican hat filter kernel.
+    1D Ricker wavelet filter kernel (sometimes known as a "Mexican Hat"
+    kernel).
 
-    The Mexican Hat, or inverted Gaussian-Laplace filter, is a
+    The Ricker wavelet, or inverted Gaussian-Laplace filter, is a
     bandpass filter. It smooths the data and removes slowly varying
     or constant structures (e.g. Background). It is useful for peak or
     multi-scale detection.
@@ -552,6 +552,11 @@ class MexicanHat1DKernel(Kernel1D):
     at the kernels center of 1. / (sqrt(2 * pi) * width ** 3). The
     normalization is the same as for `scipy.ndimage.gaussian_laplace`,
     except for a minus sign.
+
+    .. note::
+
+        See https://github.com/astropy/astropy/pull/9445 for discussions
+        related to renaming of this kernel.
 
     Parameters
     ----------
@@ -590,9 +595,9 @@ class MexicanHat1DKernel(Kernel1D):
         :include-source:
 
         import matplotlib.pyplot as plt
-        from astropy.convolution import MexicanHat1DKernel
-        mexicanhat_1D_kernel = MexicanHat1DKernel(10)
-        plt.plot(mexicanhat_1D_kernel, drawstyle='steps')
+        from astropy.convolution import RickerWavelet1DKernel
+        ricker_1d_kernel = RickerWavelet1DKernel(10)
+        plt.plot(ricker_1d_kernel, drawstyle='steps')
         plt.xlabel('x [pixels]')
         plt.ylabel('value')
         plt.show()
@@ -602,17 +607,18 @@ class MexicanHat1DKernel(Kernel1D):
 
     def __init__(self, width, **kwargs):
         amplitude = 1.0 / (np.sqrt(2 * np.pi) * width ** 3)
-        self._model = models.MexicanHat1D(amplitude, 0, width)
+        self._model = models.RickerWavelet1D(amplitude, 0, width)
         self._default_size = _round_up_to_odd_integer(8 * width)
         super().__init__(**kwargs)
         self._truncation = np.abs(self._array.sum() / self._array.size)
 
 
-class MexicanHat2DKernel(Kernel2D):
+class RickerWavelet2DKernel(Kernel2D):
     """
-    2D Mexican hat filter kernel.
+    2D Ricker wavelet filter kernel (sometimes known as a "Mexican Hat"
+    kernel).
 
-    The Mexican Hat, or inverted Gaussian-Laplace filter, is a
+    The Ricker wavelet, or inverted Gaussian-Laplace filter, is a
     bandpass filter. It smooths the data and removes slowly varying
     or constant structures (e.g. Background). It is useful for peak or
     multi-scale detection.
@@ -622,6 +628,11 @@ class MexicanHat2DKernel(Kernel2D):
     at the kernels center of 1. / (pi * width ** 4). The normalization
     is the same as for `scipy.ndimage.gaussian_laplace`, except
     for a minus sign.
+
+    .. note::
+
+        See https://github.com/astropy/astropy/pull/9445 for discussions
+        related to renaming of this kernel.
 
     Parameters
     ----------
@@ -663,9 +674,9 @@ class MexicanHat2DKernel(Kernel2D):
         :include-source:
 
         import matplotlib.pyplot as plt
-        from astropy.convolution import MexicanHat2DKernel
-        mexicanhat_2D_kernel = MexicanHat2DKernel(10)
-        plt.imshow(mexicanhat_2D_kernel, interpolation='none', origin='lower')
+        from astropy.convolution import RickerWavelet2DKernel
+        ricker_2d_kernel = RickerWavelet2DKernel(10)
+        plt.imshow(ricker_2d_kernel, interpolation='none', origin='lower')
         plt.xlabel('x [pixels]')
         plt.ylabel('y [pixels]')
         plt.colorbar()
@@ -675,7 +686,7 @@ class MexicanHat2DKernel(Kernel2D):
 
     def __init__(self, width, **kwargs):
         amplitude = 1.0 / (np.pi * width ** 4)
-        self._model = models.MexicanHat2D(amplitude, 0, 0, width)
+        self._model = models.RickerWavelet2D(amplitude, 0, 0, width)
         self._default_size = _round_up_to_odd_integer(8 * width)
         super().__init__(**kwargs)
         self._truncation = np.abs(self._array.sum() / self._array.size)
@@ -715,7 +726,7 @@ class AiryDisk2DKernel(Kernel2D):
 
     See Also
     --------
-    Gaussian2DKernel, Box2DKernel, Tophat2DKernel, MexicanHat2DKernel,
+    Gaussian2DKernel, Box2DKernel, Tophat2DKernel, RickerWavelet2DKernel,
     Ring2DKernel, TrapezoidDisk2DKernel, AiryDisk2DKernel, Moffat2DKernel
 
     Examples
@@ -779,7 +790,7 @@ class Moffat2DKernel(Kernel2D):
 
     See Also
     --------
-    Gaussian2DKernel, Box2DKernel, Tophat2DKernel, MexicanHat2DKernel,
+    Gaussian2DKernel, Box2DKernel, Tophat2DKernel, RickerWavelet2DKernel,
     Ring2DKernel, TrapezoidDisk2DKernel, AiryDisk2DKernel
 
     Examples
@@ -1024,3 +1035,13 @@ class CustomKernel(Kernel):
         self._is_bool = bool(np.all(np.logical_or(ones, zeros)))
 
         self._truncation = 0.0
+
+
+@deprecated('4.0', alternative='RickerWavelet1DKernel')
+class MexicanHat1DKernel(RickerWavelet1DKernel):
+    pass
+
+
+@deprecated('4.0', alternative='RickerWavelet2DKernel')
+class MexicanHat2DKernel(RickerWavelet2DKernel):
+    pass

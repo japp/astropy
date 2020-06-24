@@ -4,17 +4,29 @@ This module contains functions for computing robust statistics using
 Tukey's biweight function.
 """
 
-
 import numpy as np
 
-from .funcs import median_absolute_deviation
-
+from .funcs import _expand_dims, median_absolute_deviation
 
 __all__ = ['biweight_location', 'biweight_scale', 'biweight_midvariance',
            'biweight_midcovariance', 'biweight_midcorrelation']
 
 
-def biweight_location(data, c=6.0, M=None, axis=None):
+def _stat_functions(data, ignore_nan=False):
+    if isinstance(data, np.ma.MaskedArray):
+        median_func = np.ma.median
+        sum_func = np.ma.sum
+    elif ignore_nan:
+        median_func = np.nanmedian
+        sum_func = np.nansum
+    else:
+        median_func = np.median
+        sum_func = np.sum
+
+    return median_func, sum_func
+
+
+def biweight_location(data, c=6.0, M=None, axis=None, *, ignore_nan=False):
     r"""
     Compute the biweight location.
 
@@ -23,8 +35,8 @@ def biweight_location(data, c=6.0, M=None, axis=None):
 
     .. math::
 
-        \zeta_{biloc}= M + \frac{\Sigma_{|u_i|<1} \ (x_i - M) (1 - u_i^2)^2}
-            {\Sigma_{|u_i|<1} \ (1 - u_i^2)^2}
+        \zeta_{biloc}= M + \frac{\sum_{|u_i|<1} \ (x_i - M) (1 - u_i^2)^2}
+            {\sum_{|u_i|<1} \ (1 - u_i^2)^2}
 
     where :math:`x` is the input data, :math:`M` is the sample median
     (or the input initial location guess) and :math:`u_i` is given by:
@@ -41,11 +53,12 @@ def biweight_location(data, c=6.0, M=None, axis=None):
 
     Parameters
     ----------
-    data : array-like
+    data : array_like
         Input array or object that can be converted to an array.
+        ``data`` can be a `~numpy.ma.MaskedArray`.
     c : float, optional
         Tuning constant for the biweight estimator (default = 6.0).
-    M : float or array-like, optional
+    M : float or array_like, optional
         Initial guess for the location.  If ``M`` is a scalar value,
         then its value will be used for the entire array (or along each
         ``axis``, if specified).  If ``M`` is an array, then its must be
@@ -53,10 +66,12 @@ def biweight_location(data, c=6.0, M=None, axis=None):
         ``axis`` of the input array.  If `None` (default), then the
         median of the input array will be used (or along each ``axis``,
         if specified).
-    axis : int, optional
-        The axis along which the biweight locations are computed.  If
-        `None` (default), then the biweight location of the flattened
-        input array will be computed.
+    axis : `None`, int, or tuple of ints, optional
+        The axis or axes along which the biweight locations are
+        computed.  If `None` (default), then the biweight location of
+        the flattened input array will be computed.
+    ignore_nan : bool, optional
+        Whether to ignore NaN values in the input ``data``.
 
     Returns
     -------
@@ -73,7 +88,7 @@ def biweight_location(data, c=6.0, M=None, axis=None):
     ----------
     .. [1] Beers, Flynn, and Gebhardt (1990; AJ 100, 32) (http://adsabs.harvard.edu/abs/1990AJ....100...32B)
 
-    .. [2] http://www.itl.nist.gov/div898/software/dataplot/refman2/auxillar/biwloc.htm
+    .. [2] https://www.itl.nist.gov/div898/software/dataplot/refman2/auxillar/biwloc.htm
 
     Examples
     --------
@@ -88,40 +103,50 @@ def biweight_location(data, c=6.0, M=None, axis=None):
     -0.0175741540445
     """
 
+    median_func, sum_func = _stat_functions(data, ignore_nan=ignore_nan)
+
+    if isinstance(data, np.ma.MaskedArray) and ignore_nan:
+        data = np.ma.masked_where(np.isnan(data), data, copy=True)
+
     data = np.asanyarray(data).astype(np.float64)
 
     if M is None:
-        M = np.median(data, axis=axis)
+        M = median_func(data, axis=axis)
     if axis is not None:
-        M = np.expand_dims(M, axis=axis)
+        M = _expand_dims(M, axis=axis)  # NUMPY_LT_1_18
 
     # set up the differences
     d = data - M
 
     # set up the weighting
-    mad = median_absolute_deviation(data, axis=axis)
+    mad = median_absolute_deviation(data, axis=axis, ignore_nan=ignore_nan)
 
     if axis is None and mad == 0.:
         return M  # return median if data is a constant array
 
     if axis is not None:
-        mad = np.expand_dims(mad, axis=axis)
-        const_mask = (mad == 0.)
-        mad[const_mask] = 1.  # prevent divide by zero
+        mad = _expand_dims(mad, axis=axis)  # NUMPY_LT_1_18
+        mad[mad == 0] = 1.  # prevent divide by zero
 
     u = d / (c * mad)
 
     # now remove the outlier points
-    mask = (np.abs(u) >= 1)
+    # ignore RuntimeWarnings for comparisons with NaN data values
+    with np.errstate(invalid='ignore'):
+        mask = np.abs(u) >= 1
     u = (1 - u ** 2) ** 2
     u[mask] = 0
 
-    # along the input axis if data is constant, d will be zero, thus
-    # the median value will be returned along that axis
-    return M.squeeze() + (d * u).sum(axis=axis) / u.sum(axis=axis)
+    # Along the input axis if data is constant, d will be zero, thus
+    # the median value will be returned along that axis.
+    # Ignore RuntimeWarnings for divide by zero if all NaN along an axis
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return M.squeeze() + (sum_func(d * u, axis=axis) /
+                              sum_func(u, axis=axis))
 
 
-def biweight_scale(data, c=9.0, M=None, axis=None, modify_sample_size=False):
+def biweight_scale(data, c=9.0, M=None, axis=None, modify_sample_size=False,
+                   *, ignore_nan=False):
     r"""
     Compute the biweight scale.
 
@@ -133,8 +158,8 @@ def biweight_scale(data, c=9.0, M=None, axis=None, modify_sample_size=False):
 
     .. math::
 
-        \zeta_{biscl} = \sqrt{n} \ \frac{\sqrt{\Sigma_{|u_i| < 1} \
-            (x_i - M)^2 (1 - u_i^2)^4}} {|(\Sigma_{|u_i| < 1} \
+        \zeta_{biscl} = \sqrt{n} \ \frac{\sqrt{\sum_{|u_i| < 1} \
+            (x_i - M)^2 (1 - u_i^2)^4}} {|(\sum_{|u_i| < 1} \
             (1 - u_i^2) (1 - 5u_i^2))|}
 
     where :math:`x` is the input data, :math:`M` is the sample median
@@ -161,28 +186,29 @@ def biweight_scale(data, c=9.0, M=None, axis=None, modify_sample_size=False):
 
     .. math::
 
-        n = \Sigma_{|u_i| < 1} \ 1
+        n = \sum_{|u_i| < 1} \ 1
 
     which results in a value closer to the true standard deviation for
     small sample sizes or for a large number of rejected values.
 
     Parameters
     ----------
-    data : array-like
+    data : array_like
         Input array or object that can be converted to an array.
+        ``data`` can be a `~numpy.ma.MaskedArray`.
     c : float, optional
         Tuning constant for the biweight estimator (default = 9.0).
-    M : float or array-like, optional
+    M : float or array_like, optional
         The location estimate.  If ``M`` is a scalar value, then its
         value will be used for the entire array (or along each ``axis``,
         if specified).  If ``M`` is an array, then its must be an array
         containing the location estimate along each ``axis`` of the
         input array.  If `None` (default), then the median of the input
         array will be used (or along each ``axis``, if specified).
-    axis : int, optional
-        The axis along which the biweight scales are computed.  If
-        `None` (default), then the biweight scale of the flattened input
-        array will be computed.
+    axis : `None`, int, or tuple of ints, optional
+        The axis or axes along which the biweight scales are computed.
+        If `None` (default), then the biweight scale of the flattened
+        input array will be computed.
     modify_sample_size : bool, optional
         If `False` (default), then the sample size used is the total
         number of elements in the array (or along the input ``axis``, if
@@ -192,6 +218,8 @@ def biweight_scale(data, c=9.0, M=None, axis=None, modify_sample_size=False):
         the non-rejected values), which results in a value closer to the
         true standard deviation for small sample sizes or for a large
         number of rejected values.
+    ignore_nan : bool, optional
+        Whether to ignore NaN values in the input ``data``.
 
     Returns
     -------
@@ -208,7 +236,7 @@ def biweight_scale(data, c=9.0, M=None, axis=None, modify_sample_size=False):
     ----------
     .. [1] Beers, Flynn, and Gebhardt (1990; AJ 100, 32) (http://adsabs.harvard.edu/abs/1990AJ....100...32B)
 
-    .. [2] http://www.itl.nist.gov/div898/software/dataplot/refman2/auxillar/biwscale.htm
+    .. [2] https://www.itl.nist.gov/div898/software/dataplot/refman2/auxillar/biwscale.htm
 
     Examples
     --------
@@ -225,11 +253,12 @@ def biweight_scale(data, c=9.0, M=None, axis=None, modify_sample_size=False):
 
     return np.sqrt(
         biweight_midvariance(data, c=c, M=M, axis=axis,
-                             modify_sample_size=modify_sample_size))
+                             modify_sample_size=modify_sample_size,
+                             ignore_nan=ignore_nan))
 
 
 def biweight_midvariance(data, c=9.0, M=None, axis=None,
-                         modify_sample_size=False):
+                         modify_sample_size=False, *, ignore_nan=False):
     r"""
     Compute the biweight midvariance.
 
@@ -239,8 +268,8 @@ def biweight_midvariance(data, c=9.0, M=None, axis=None,
 
     .. math::
 
-        \zeta_{bivar} = n \ \frac{\Sigma_{|u_i| < 1} \
-            (x_i - M)^2 (1 - u_i^2)^4} {(\Sigma_{|u_i| < 1} \
+        \zeta_{bivar} = n \ \frac{\sum_{|u_i| < 1} \
+            (x_i - M)^2 (1 - u_i^2)^4} {(\sum_{|u_i| < 1} \
             (1 - u_i^2) (1 - 5u_i^2))^2}
 
     where :math:`x` is the input data, :math:`M` is the sample median
@@ -268,28 +297,29 @@ def biweight_midvariance(data, c=9.0, M=None, axis=None,
 
     .. math::
 
-        n = \Sigma_{|u_i| < 1} \ 1
+        n = \sum_{|u_i| < 1} \ 1
 
     which results in a value closer to the true variance for small
     sample sizes or for a large number of rejected values.
 
     Parameters
     ----------
-    data : array-like
+    data : array_like
         Input array or object that can be converted to an array.
+        ``data`` can be a `~numpy.ma.MaskedArray`.
     c : float, optional
         Tuning constant for the biweight estimator (default = 9.0).
-    M : float or array-like, optional
+    M : float or array_like, optional
         The location estimate.  If ``M`` is a scalar value, then its
         value will be used for the entire array (or along each ``axis``,
         if specified).  If ``M`` is an array, then its must be an array
         containing the location estimate along each ``axis`` of the
         input array.  If `None` (default), then the median of the input
         array will be used (or along each ``axis``, if specified).
-    axis : int, optional
-        The axis along which the biweight midvariances are computed.  If
-        `None` (default), then the biweight midvariance of the flattened
-        input array will be computed.
+    axis : `None`, int, or tuple of ints, optional
+        The axis or axes along which the biweight midvariances are
+        computed.  If `None` (default), then the biweight midvariance of
+        the flattened input array will be computed.
     modify_sample_size : bool, optional
         If `False` (default), then the sample size used is the total
         number of elements in the array (or along the input ``axis``, if
@@ -299,6 +329,8 @@ def biweight_midvariance(data, c=9.0, M=None, axis=None,
         includes only the non-rejected values), which results in a value
         closer to the true variance for small sample sizes or for a
         large number of rejected values.
+    ignore_nan : bool, optional
+        Whether to ignore NaN values in the input ``data``.
 
     Returns
     -------
@@ -330,49 +362,62 @@ def biweight_midvariance(data, c=9.0, M=None, axis=None,
     0.97362869104
     """
 
+    median_func, sum_func = _stat_functions(data, ignore_nan=ignore_nan)
+
+    if isinstance(data, np.ma.MaskedArray) and ignore_nan:
+        data = np.ma.masked_where(np.isnan(data), data, copy=True)
+
     data = np.asanyarray(data).astype(np.float64)
 
     if M is None:
-        M = np.median(data, axis=axis)
+        M = median_func(data, axis=axis)
     if axis is not None:
-        M = np.expand_dims(M, axis=axis)
+        M = _expand_dims(M, axis=axis)  # NUMPY_LT_1_18
 
     # set up the differences
     d = data - M
 
     # set up the weighting
-    mad = median_absolute_deviation(data, axis=axis)
+    mad = median_absolute_deviation(data, axis=axis, ignore_nan=ignore_nan)
 
     if axis is None and mad == 0.:
         return 0.  # return zero if data is a constant array
 
     if axis is not None:
-        mad = np.expand_dims(mad, axis=axis)
-        const_mask = (mad == 0.)
-        mad[const_mask] = 1.  # prevent divide by zero
+        mad = _expand_dims(mad, axis=axis)  # NUMPY_LT_1_18
+        mad[mad == 0] = 1.  # prevent divide by zero
 
     u = d / (c * mad)
 
     # now remove the outlier points
-    mask = np.abs(u) < 1
+    # ignore RuntimeWarnings for comparisons with NaN data values
+    with np.errstate(invalid='ignore'):
+        mask = np.abs(u) < 1
+    if isinstance(mask, np.ma.MaskedArray):
+        mask = mask.filled(fill_value=False)  # exclude masked data values
+
     u = u ** 2
 
     if modify_sample_size:
-        n = mask.sum(axis=axis)
+        n = sum_func(mask, axis=axis)
     else:
-        if axis is None:
-            n = data.size
-        else:
-            n = data.shape[axis]
+        # set good values to 1, bad values to 0
+        include_mask = np.ones(data.shape)
+        if isinstance(data, np.ma.MaskedArray):
+            include_mask[data.mask] = 0
+        if ignore_nan:
+            include_mask[np.isnan(data)] = 0
+        n = np.sum(include_mask, axis=axis)
 
     f1 = d * d * (1. - u)**4
     f1[~mask] = 0.
-    f1 = f1.sum(axis=axis)
+    f1 = sum_func(f1, axis=axis)
     f2 = (1. - u) * (1. - 5.*u)
     f2[~mask] = 0.
-    f2 = np.abs(f2.sum(axis=axis))**2
+    f2 = np.abs(np.sum(f2, axis=axis))**2
 
-    return n * f1 / f2
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return n * f1 / f2
 
 
 def biweight_midcovariance(data, c=9.0, M=None, modify_sample_size=False):
@@ -415,10 +460,10 @@ def biweight_midcovariance(data, c=9.0, M=None, modify_sample_size=False):
 
     .. math::
 
-        \zeta_{xy} = n \ \frac{\Sigma_{|u_i| < 1, \ |v_i| < 1} \
+        \zeta_{xy} = n_{xy} \ \frac{\sum_{|u_i| < 1, \ |v_i| < 1} \
             (x_i - M_x) (1 - u_i^2)^2 (y_i - M_y) (1 - v_i^2)^2}
-            {(\Sigma_{|u_i| < 1} \ (1 - u_i^2) (1 - 5u_i^2))
-            (\Sigma_{|v_i| < 1} \ (1 - v_i^2) (1 - 5v_i^2))}
+            {(\sum_{|u_i| < 1} \ (1 - u_i^2) (1 - 5u_i^2))
+            (\sum_{|v_i| < 1} \ (1 - v_i^2) (1 - 5v_i^2))}
 
     where :math:`M_x` and :math:`M_y` are the medians (or the input
     locations) of the two variables and :math:`u_i` and :math:`v_i` are
@@ -436,24 +481,33 @@ def biweight_midcovariance(data, c=9.0, M=None, modify_sample_size=False):
     :math:`x` and :math:`y` variables.  The biweight midvariance tuning
     constant ``c`` is typically 9.0 (the default).
 
-    For the standard definition of biweight midcovariance :math:`n` is
-    the total number of observations of each variable.  That definition
-    is used if ``modify_sample_size`` is `False`, which is the default.
+    For the standard definition of biweight midcovariance,
+    :math:`n_{xy}` is the total number of observations of each variable.
+    That definition is used if ``modify_sample_size`` is `False`, which
+    is the default.
 
-    However, if ``modify_sample_size = True``, then :math:`n` is the
-    number of observations for which :math:`|u_i| < 1` and :math:`|v_i|
+    However, if ``modify_sample_size = True``, then :math:`n_{xy}` is the
+    number of observations for which :math:`|u_i| < 1` and/or :math:`|v_i|
     < 1`, i.e.
 
     .. math::
 
-        n = \Sigma_{|u_i| < 1, \ |v_i| < 1} \ 1
+        n_{xx} = \sum_{|u_i| < 1} \ 1
+
+    .. math::
+
+        n_{xy} = n_{yx} = \sum_{|u_i| < 1, \ |v_i| < 1} \ 1
+
+    .. math::
+
+        n_{yy} = \sum_{|v_i| < 1} \ 1
 
     which results in a value closer to the true variance for small
     sample sizes or for a large number of rejected values.
 
     Parameters
     ----------
-    data : 2D or 1D array-like
+    data : 2D or 1D array_like
         Input data either as a 2D or 1D array.  For a 2D array, it
         should have a shape (N_variables, N_observations).  A 1D array
         may be input for observations of a single variable, in which
@@ -465,7 +519,7 @@ def biweight_midcovariance(data, c=9.0, M=None, modify_sample_size=False):
     c : float, optional
         Tuning constant for the biweight estimator (default = 9.0).
 
-    M : float or 1D array-like, optional
+    M : float or 1D array_like, optional
         The location estimate of each variable, either as a scalar or
         array.  If ``M`` is an array, then its must be a 1D array
         containing the location estimate of each row (i.e. ``a.ndim``
@@ -498,7 +552,7 @@ def biweight_midcovariance(data, c=9.0, M=None, modify_sample_size=False):
 
     References
     ----------
-    .. [1] http://www.itl.nist.gov/div898/software/dataplot/refman2/auxillar/biwmidc.htm
+    .. [1] https://www.itl.nist.gov/div898/software/dataplot/refman2/auxillar/biwmidc.htm
 
     Examples
     --------
@@ -542,9 +596,7 @@ def biweight_midcovariance(data, c=9.0, M=None, modify_sample_size=False):
 
     # set up the weighting
     mad = median_absolute_deviation(data, axis=1)
-
-    const_mask = (mad == 0.)
-    mad[const_mask] = 1.  # prevent divide by zero
+    mad[mad == 0] = 1.  # prevent divide by zero
 
     u = (d.T / (c * mad)).T
 
@@ -589,13 +641,13 @@ def biweight_midcorrelation(x, y, c=9.0, M=None, modify_sample_size=False):
 
     Parameters
     ----------
-    x, y : 1D array-like
+    x, y : 1D array_like
         Input arrays for the two variables.  ``x`` and ``y`` must be 1D
         arrays and have the same number of elements.
     c : float, optional
         Tuning constant for the biweight estimator (default = 9.0).  See
         `biweight_midcovariance` for more details.
-    M : float or array-like, optional
+    M : float or array_like, optional
         The location estimate.  If ``M`` is a scalar value, then its
         value will be used for the entire array (or along each ``axis``,
         if specified).  If ``M`` is an array, then its must be an array

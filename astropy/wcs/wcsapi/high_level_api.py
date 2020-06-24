@@ -22,6 +22,27 @@ def default_order(components):
     return order
 
 
+def _toindex(value):
+    """
+    Convert value to an int or an int array.
+    Input coordinates converted to integers
+    corresponding to the center of the pixel.
+    The convention is that the center of the pixel is
+    (0, 0), while the lower left corner is (-0.5, -0.5).
+    The outputs are used to index the mask.
+    Examples
+    --------
+    >>> _toindex(np.array([-0.5, 0.49999]))
+    array([0, 0])
+    >>> _toindex(np.array([0.5, 1.49999]))
+    array([1, 1])
+    >>> _toindex(np.array([1.5, 2.49999]))
+    array([2, 2])
+    """
+    indx = np.asarray(np.floor(np.asarray(value) + 0.5), dtype=int)
+    return indx
+
+
 class BaseHighLevelWCS(metaclass=abc.ABCMeta):
     """
     Abstract base class for the high-level WCS interface.
@@ -51,7 +72,6 @@ class BaseHighLevelWCS(metaclass=abc.ABCMeta):
         indexing and ordering conventions.
         """
 
-    @abc.abstractmethod
     def array_index_to_world(self, *index_arrays):
         """
         Convert array indices to world coordinates (represented by Astropy
@@ -64,6 +84,7 @@ class BaseHighLevelWCS(metaclass=abc.ABCMeta):
         `~astropy.wcs.wcsapi.BaseLowLevelWCS.array_index_to_world_values` for
         pixel indexing and ordering conventions.
         """
+        return self.pixel_to_world(*index_arrays[::-1])
 
     @abc.abstractmethod
     def world_to_pixel(self, *world_objects):
@@ -78,7 +99,6 @@ class BaseHighLevelWCS(metaclass=abc.ABCMeta):
         indexing and ordering conventions.
         """
 
-    @abc.abstractmethod
     def world_to_array_index(self, *world_objects):
         """
         Convert world coordinates (represented by Astropy objects) to array
@@ -91,6 +111,10 @@ class BaseHighLevelWCS(metaclass=abc.ABCMeta):
         pixel indexing and ordering conventions. The indices should be returned
         as rounded integers.
         """
+        if self.pixel_n_dim == 1:
+            return _toindex(self.world_to_pixel(*world_objects))
+        else:
+            return tuple(_toindex(self.world_to_pixel(*world_objects)[::-1]).tolist())
 
 
 class HighLevelWCSMixin(BaseHighLevelWCS):
@@ -130,7 +154,7 @@ class HighLevelWCSMixin(BaseHighLevelWCS):
         unique_match = True
         for w in world_objects:
             matches = []
-            for key, (klass, _, _) in classes.items():
+            for key, (klass, *_) in classes.items():
                 if isinstance(w, klass):
                     matches.append(key)
             if len(matches) == 1:
@@ -147,7 +171,14 @@ class HighLevelWCSMixin(BaseHighLevelWCS):
 
         if unique_match:
 
-            for key, (klass, args, kwargs) in classes.items():
+            for key, (klass, args, kwargs, *rest) in classes.items():
+
+                if len(rest) == 0:
+                    klass_gen = klass
+                elif len(rest) == 1:
+                    klass_gen = rest[0]
+                else:
+                    raise ValueError("Tuples in world_axis_object_classes should have length 3 or 4")
 
                 # FIXME: For now SkyCoord won't auto-convert upon initialization
                 # https://github.com/astropy/astropy/issues/7689
@@ -158,12 +189,21 @@ class HighLevelWCSMixin(BaseHighLevelWCS):
                     else:
                         objects[key] = world_by_key[key]
                 else:
-                    objects[key] = klass(world_by_key[key], *args, **kwargs)
+                    objects[key] = klass_gen(world_by_key[key], *args, **kwargs)
 
         else:
 
             for ikey, key in enumerate(classes):
-                klass, args, kwargs = classes[key]
+
+                klass, args, kwargs, *rest = classes[key]
+
+                if len(rest) == 0:
+                    klass_gen = klass
+                elif len(rest) == 1:
+                    klass_gen = rest[0]
+                else:
+                    raise ValueError("Tuples in world_axis_object_classes should have length 3 or 4")
+
                 w = world_objects[ikey]
                 if not isinstance(w, klass):
                     raise ValueError("Expected the following order of world "
@@ -178,12 +218,15 @@ class HighLevelWCSMixin(BaseHighLevelWCS):
                     else:
                         objects[key] = w
                 else:
-                    objects[key] = klass(w, *args, **kwargs)
+                    objects[key] = klass_gen(w, *args, **kwargs)
 
         # We now extract the attributes needed for the world values
         world = []
         for key, _, attr in components:
-            world.append(rec_getattr(objects[key], attr))
+            if callable(attr):
+                world.append(attr(objects[key]))
+            else:
+                world.append(rec_getattr(objects[key], attr))
 
         # Finally we convert to pixel coordinates
         pixel = self.low_level_wcs.world_to_pixel_values(*world)
@@ -223,19 +266,16 @@ class HighLevelWCSMixin(BaseHighLevelWCS):
         result = []
 
         for key in default_order(components):
-            klass, ar, kw = classes[key]
-            result.append(klass(*args[key], *ar, **kwargs[key], **kw))
+            klass, ar, kw, *rest = classes[key]
+            if len(rest) == 0:
+                klass_gen = klass
+            elif len(rest) == 1:
+                klass_gen = rest[0]
+            else:
+                raise ValueError("Tuples in world_axis_object_classes should have length 3 or 4")
+            result.append(klass_gen(*args[key], *ar, **kwargs[key], **kw))
 
         if len(result) == 1:
             return result[0]
         else:
             return result
-
-    def array_index_to_world(self, *index_arrays):
-        return self.pixel_to_world(*index_arrays[::-1])
-
-    def world_to_array_index(self, *world_objects):
-        if self.pixel_n_dim == 1:
-            return np.round(self.world_to_pixel(*world_objects)).astype(int)
-        else:
-            return tuple(np.round(self.world_to_pixel(*world_objects)[::-1]).astype(int).tolist())

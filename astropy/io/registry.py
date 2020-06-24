@@ -1,6 +1,5 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-
 import contextlib
 import pathlib
 import re
@@ -13,7 +12,6 @@ from operator import itemgetter
 
 import numpy as np
 
-
 __all__ = ['register_reader', 'register_writer', 'register_identifier',
            'identify_format', 'get_reader', 'get_writer', 'read', 'write',
            'get_formats', 'IORegistryError', 'delay_doc_updates',
@@ -21,7 +19,6 @@ __all__ = ['register_reader', 'register_writer', 'register_identifier',
 
 
 __doctest_skip__ = ['register_identifier']
-
 
 _readers = OrderedDict()
 _writers = OrderedDict()
@@ -483,7 +480,7 @@ def get_writer(data_format, data_class):
                 data_format, data_class.__name__, format_table_str))
 
 
-def read(cls, *args, format=None, **kwargs):
+def read(cls, *args, format=None, cache=False, **kwargs):
     """
     Read in data.
 
@@ -497,14 +494,14 @@ def read(cls, *args, format=None, **kwargs):
             fileobj = None
 
             if len(args):
-                if isinstance(args[0], PATH_TYPES):
+                if isinstance(args[0], PATH_TYPES) and not os.path.isdir(args[0]):
                     from astropy.utils.data import get_readable_fileobj
                     # path might be a pathlib.Path object
                     if isinstance(args[0], pathlib.Path):
                         args = (str(args[0]),) + args[1:]
                     path = args[0]
                     try:
-                        ctx = get_readable_fileobj(args[0], encoding='binary')
+                        ctx = get_readable_fileobj(args[0], encoding='binary', cache=cache)
                         fileobj = ctx.__enter__()
                     except OSError:
                         raise
@@ -596,7 +593,9 @@ def _get_valid_format(mode, cls, path, fileobj, args, kwargs):
 
     if len(valid_formats) == 0:
         format_table_str = _get_format_table_str(cls, mode.capitalize())
-        raise IORegistryError("Format could not be identified.\n"
+        raise IORegistryError("Format could not be identified based on the"
+                              " file name or contents, please provide a"
+                              " 'format' argument.\n"
                               "The available formats are:\n"
                               "{}".format(format_table_str))
     elif len(valid_formats) > 1:
@@ -675,7 +674,8 @@ class UnifiedReadWrite:
             reader_doc += header
             reader_doc += re.sub('.', '=', header)
             reader_doc += os.linesep
-            reader_doc += inspect.cleandoc(doc)
+            if doc is not None:
+                reader_doc += inspect.cleandoc(doc)
 
         if out is None:
             import pydoc

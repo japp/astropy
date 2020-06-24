@@ -1,4 +1,5 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
+# pylint: disable=invalid-name
 
 import types
 
@@ -11,6 +12,7 @@ from astropy.modeling.core import Fittable1DModel
 from astropy.modeling.parameters import Parameter
 from astropy.modeling import models
 from astropy.modeling import fitting
+from astropy.utils.exceptions import AstropyUserWarning
 
 from .utils import ignore_non_integer_warning
 
@@ -133,7 +135,9 @@ class TestBounds:
         line_model = models.Linear1D(guess_slope, guess_intercept,
                                      bounds=bounds)
         fitter = fitting.LevMarLSQFitter()
-        model = fitter(line_model, self.x, self.y)
+        with pytest.warns(AstropyUserWarning,
+                          match=r'Model is linear in parameters'):
+            model = fitter(line_model, self.x, self.y)
         slope = model.slope.value
         intercept = model.intercept.value
         assert slope + 10 ** -5 >= bounds['slope'][0]
@@ -169,7 +173,9 @@ class TestBounds:
                                   x_stddev=4., y_stddev=4., theta=0.5,
                                   bounds=bounds)
         gauss_fit = fitting.LevMarLSQFitter()
-        model = gauss_fit(gauss, X, Y, self.data)
+        with pytest.warns(AstropyUserWarning,
+                          match='The fit may be unsuccessful'):
+            model = gauss_fit(gauss, X, Y, self.data)
         x_mean = model.x_mean.value
         y_mean = model.y_mean.value
         x_stddev = model.x_stddev.value
@@ -226,7 +232,9 @@ class TestLinearConstraints:
         self.p1.c0.fixed = True
         self.p1.c1.fixed = True
         pfit = fitting.LinearLSQFitter()
-        model = pfit(self.p1, self.x, self.y)
+        with pytest.warns(AstropyUserWarning,
+                          match=r'The fit may be poorly conditioned'):
+            model = pfit(self.p1, self.x, self.y)
         assert_allclose(self.y, model(self.x))
 
 # Test constraints as parameter properties
@@ -479,7 +487,10 @@ def test_gaussian2d_positive_stddev():
 
 # Issue #6403
 @pytest.mark.skipif('not HAS_SCIPY')
+@pytest.mark.filterwarnings(r'ignore:Model is linear in parameters.*')
 def test_2d_model():
+    from astropy.utils import NumpyRNGContext
+
     # 2D model with LevMarLSQFitter
     gauss2d = models.Gaussian2D(10.2, 4.3, 5, 2, 1.2, 1.4)
     fitter = fitting.LevMarLSQFitter()
@@ -489,7 +500,6 @@ def test_2d_model():
     z = gauss2d(x, y)
     w = np.ones(x.size)
     w.shape = x.shape
-    from astropy.utils import NumpyRNGContext
 
     with NumpyRNGContext(1234567890):
 
@@ -521,3 +531,51 @@ def test_2d_model():
         assert_allclose(m.parameters, p2.parameters, rtol=0.05)
         m = fitter(p2, x, y, z + 2 * n, weights=None)
         assert_allclose(m.parameters, p2.parameters, rtol=0.05)
+
+
+def test_set_prior_posterior():
+    model = models.Polynomial1D(1)
+    model.c0.prior = models.Gaussian1D(2.3, 2, .1)
+    assert model.c0.prior(2) == 2.3
+
+    model.c0.posterior = models.Linear1D(1, .2)
+    assert model.c0.posterior(1) == 1.2
+
+
+def test_set_constraints():
+    g = models.Gaussian1D()
+    p = models.Polynomial1D(1)
+
+    # Set bounds before model combination
+    g.stddev.bounds = (0, 3)
+    m = g + p
+    assert m.bounds == {'amplitude_0': (None, None),
+                        'mean_0': (None, None),
+                        'stddev_0': (0.0, 3.0),
+                        'c0_1': (None, None),
+                        'c1_1': (None, None)}
+
+    # Set bounds on the compound model
+    m.stddev_0.bounds = (1, 3)
+    assert m.bounds == {'amplitude_0': (None, None),
+                        'mean_0': (None, None),
+                        'stddev_0': (1.0, 3.0),
+                        'c0_1': (None, None),
+                        'c1_1': (None, None)}
+
+    # Set the bounds of a Parameter directly in the bounds dict
+    m.bounds['stddev_0'] = (4, 5)
+    assert m.bounds == {'amplitude_0': (None, None),
+                        'mean_0': (None, None),
+                        'stddev_0': (4, 5),
+                        'c0_1': (None, None),
+                        'c1_1': (None, None)}
+
+    # Set the bounds of a Parameter on the child model bounds dict
+    g.bounds['stddev'] = (1, 5)
+    m = g + p
+    assert m.bounds == {'amplitude_0': (None, None),
+                        'mean_0': (None, None),
+                        'stddev_0': (1, 5),
+                        'c0_1': (None, None),
+                        'c1_1': (None, None)}

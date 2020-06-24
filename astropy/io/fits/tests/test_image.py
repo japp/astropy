@@ -1,9 +1,7 @@
 # Licensed under a 3-clause BSD style license - see PYFITS.rst
 
-
 import math
 import os
-import platform
 import re
 import time
 import warnings
@@ -241,8 +239,6 @@ class TestImageFunctions(FitsTestCase):
         with fits.open(self.temp('test.fits')) as hdul:
             assert hdul[0].name == 'XPRIMARY2'
 
-    @pytest.mark.xfail(platform.system() == 'Windows',
-                       reason='https://github.com/astropy/astropy/issues/5797')
     def test_io_manipulation(self):
         # Get a keyword value.  An extension can be referred by name or by
         # number.  Both extension and keyword names are case insensitive.
@@ -344,7 +340,7 @@ class TestImageFunctions(FitsTestCase):
                 del u[2]
                 u.flush()
 
-                # the write method in HDUList class writes the current HDUList,
+                # The write method in HDUList class writes the current HDUList,
                 # with all changes made up to now, to a new file.  This method
                 # works the same disregard the mode the HDUList was opened
                 # with.
@@ -516,125 +512,33 @@ class TestImageFunctions(FitsTestCase):
         d = hdul[0]
         dat = hdul[0].data
 
-        # TODO: Generate these perumtions instead of having them all written
-        # out, yeesh!
-        assert (d.section[:, :, :] == dat[:, :, :]).all()
-        assert (d.section[:, :] == dat[:, :]).all()
         assert (d.section[:] == dat[:]).all()
-        assert (d.section[0, :, :] == dat[0, :, :]).all()
-        assert (d.section[1, :, :] == dat[1, :, :]).all()
-        assert (d.section[0, 0, :] == dat[0, 0, :]).all()
-        assert (d.section[0, 1, :] == dat[0, 1, :]).all()
-        assert (d.section[0, 2, :] == dat[0, 2, :]).all()
-        assert (d.section[1, 0, :] == dat[1, 0, :]).all()
-        assert (d.section[1, 1, :] == dat[1, 1, :]).all()
-        assert (d.section[1, 2, :] == dat[1, 2, :]).all()
-        assert (d.section[0, 0, 0] == dat[0, 0, 0]).all()
-        assert (d.section[0, 0, 1] == dat[0, 0, 1]).all()
-        assert (d.section[0, 0, 2] == dat[0, 0, 2]).all()
-        assert (d.section[0, 1, 0] == dat[0, 1, 0]).all()
-        assert (d.section[0, 1, 1] == dat[0, 1, 1]).all()
-        assert (d.section[0, 1, 2] == dat[0, 1, 2]).all()
-        assert (d.section[0, 2, 0] == dat[0, 2, 0]).all()
-        assert (d.section[0, 2, 1] == dat[0, 2, 1]).all()
-        assert (d.section[0, 2, 2] == dat[0, 2, 2]).all()
-        assert (d.section[1, 0, 0] == dat[1, 0, 0]).all()
-        assert (d.section[1, 0, 1] == dat[1, 0, 1]).all()
-        assert (d.section[1, 0, 2] == dat[1, 0, 2]).all()
-        assert (d.section[1, 1, 0] == dat[1, 1, 0]).all()
-        assert (d.section[1, 1, 1] == dat[1, 1, 1]).all()
-        assert (d.section[1, 1, 2] == dat[1, 1, 2]).all()
-        assert (d.section[1, 2, 0] == dat[1, 2, 0]).all()
-        assert (d.section[1, 2, 1] == dat[1, 2, 1]).all()
-        assert (d.section[1, 2, 2] == dat[1, 2, 2]).all()
-        assert (d.section[:, 0, 0] == dat[:, 0, 0]).all()
-        assert (d.section[:, 0, 1] == dat[:, 0, 1]).all()
-        assert (d.section[:, 0, 2] == dat[:, 0, 2]).all()
-        assert (d.section[:, 1, 0] == dat[:, 1, 0]).all()
-        assert (d.section[:, 1, 1] == dat[:, 1, 1]).all()
-        assert (d.section[:, 1, 2] == dat[:, 1, 2]).all()
-        assert (d.section[:, 2, 0] == dat[:, 2, 0]).all()
-        assert (d.section[:, 2, 1] == dat[:, 2, 1]).all()
-        assert (d.section[:, 2, 2] == dat[:, 2, 2]).all()
-        assert (d.section[0, :, 0] == dat[0, :, 0]).all()
-        assert (d.section[0, :, 1] == dat[0, :, 1]).all()
-        assert (d.section[0, :, 2] == dat[0, :, 2]).all()
-        assert (d.section[1, :, 0] == dat[1, :, 0]).all()
-        assert (d.section[1, :, 1] == dat[1, :, 1]).all()
-        assert (d.section[1, :, 2] == dat[1, :, 2]).all()
-        assert (d.section[:, :, 0] == dat[:, :, 0]).all()
-        assert (d.section[:, :, 1] == dat[:, :, 1]).all()
-        assert (d.section[:, :, 2] == dat[:, :, 2]).all()
-        assert (d.section[:, 0, :] == dat[:, 0, :]).all()
-        assert (d.section[:, 1, :] == dat[:, 1, :]).all()
-        assert (d.section[:, 2, :] == dat[:, 2, :]).all()
+        assert (d.section[:, :] == dat[:, :]).all()
 
-        assert (d.section[:, :, 0:1] == dat[:, :, 0:1]).all()
-        assert (d.section[:, :, 0:2] == dat[:, :, 0:2]).all()
-        assert (d.section[:, :, 0:3] == dat[:, :, 0:3]).all()
-        assert (d.section[:, :, 1:2] == dat[:, :, 1:2]).all()
-        assert (d.section[:, :, 1:3] == dat[:, :, 1:3]).all()
-        assert (d.section[:, :, 2:3] == dat[:, :, 2:3]).all()
-        assert (d.section[0:1, 0:1, 0:1] == dat[0:1, 0:1, 0:1]).all()
-        assert (d.section[0:1, 0:1, 0:2] == dat[0:1, 0:1, 0:2]).all()
-        assert (d.section[0:1, 0:1, 0:3] == dat[0:1, 0:1, 0:3]).all()
-        assert (d.section[0:1, 0:1, 1:2] == dat[0:1, 0:1, 1:2]).all()
-        assert (d.section[0:1, 0:1, 1:3] == dat[0:1, 0:1, 1:3]).all()
-        assert (d.section[0:1, 0:1, 2:3] == dat[0:1, 0:1, 2:3]).all()
-        assert (d.section[0:1, 0:2, 0:1] == dat[0:1, 0:2, 0:1]).all()
-        assert (d.section[0:1, 0:2, 0:2] == dat[0:1, 0:2, 0:2]).all()
-        assert (d.section[0:1, 0:2, 0:3] == dat[0:1, 0:2, 0:3]).all()
-        assert (d.section[0:1, 0:2, 1:2] == dat[0:1, 0:2, 1:2]).all()
-        assert (d.section[0:1, 0:2, 1:3] == dat[0:1, 0:2, 1:3]).all()
-        assert (d.section[0:1, 0:2, 2:3] == dat[0:1, 0:2, 2:3]).all()
-        assert (d.section[0:1, 0:3, 0:1] == dat[0:1, 0:3, 0:1]).all()
-        assert (d.section[0:1, 0:3, 0:2] == dat[0:1, 0:3, 0:2]).all()
-        assert (d.section[0:1, 0:3, 0:3] == dat[0:1, 0:3, 0:3]).all()
-        assert (d.section[0:1, 0:3, 1:2] == dat[0:1, 0:3, 1:2]).all()
-        assert (d.section[0:1, 0:3, 1:3] == dat[0:1, 0:3, 1:3]).all()
-        assert (d.section[0:1, 0:3, 2:3] == dat[0:1, 0:3, 2:3]).all()
-        assert (d.section[0:1, 1:2, 0:1] == dat[0:1, 1:2, 0:1]).all()
-        assert (d.section[0:1, 1:2, 0:2] == dat[0:1, 1:2, 0:2]).all()
-        assert (d.section[0:1, 1:2, 0:3] == dat[0:1, 1:2, 0:3]).all()
-        assert (d.section[0:1, 1:2, 1:2] == dat[0:1, 1:2, 1:2]).all()
-        assert (d.section[0:1, 1:2, 1:3] == dat[0:1, 1:2, 1:3]).all()
-        assert (d.section[0:1, 1:2, 2:3] == dat[0:1, 1:2, 2:3]).all()
-        assert (d.section[0:1, 1:3, 0:1] == dat[0:1, 1:3, 0:1]).all()
-        assert (d.section[0:1, 1:3, 0:2] == dat[0:1, 1:3, 0:2]).all()
-        assert (d.section[0:1, 1:3, 0:3] == dat[0:1, 1:3, 0:3]).all()
-        assert (d.section[0:1, 1:3, 1:2] == dat[0:1, 1:3, 1:2]).all()
-        assert (d.section[0:1, 1:3, 1:3] == dat[0:1, 1:3, 1:3]).all()
-        assert (d.section[0:1, 1:3, 2:3] == dat[0:1, 1:3, 2:3]).all()
-        assert (d.section[1:2, 0:1, 0:1] == dat[1:2, 0:1, 0:1]).all()
-        assert (d.section[1:2, 0:1, 0:2] == dat[1:2, 0:1, 0:2]).all()
-        assert (d.section[1:2, 0:1, 0:3] == dat[1:2, 0:1, 0:3]).all()
-        assert (d.section[1:2, 0:1, 1:2] == dat[1:2, 0:1, 1:2]).all()
-        assert (d.section[1:2, 0:1, 1:3] == dat[1:2, 0:1, 1:3]).all()
-        assert (d.section[1:2, 0:1, 2:3] == dat[1:2, 0:1, 2:3]).all()
-        assert (d.section[1:2, 0:2, 0:1] == dat[1:2, 0:2, 0:1]).all()
-        assert (d.section[1:2, 0:2, 0:2] == dat[1:2, 0:2, 0:2]).all()
-        assert (d.section[1:2, 0:2, 0:3] == dat[1:2, 0:2, 0:3]).all()
-        assert (d.section[1:2, 0:2, 1:2] == dat[1:2, 0:2, 1:2]).all()
-        assert (d.section[1:2, 0:2, 1:3] == dat[1:2, 0:2, 1:3]).all()
-        assert (d.section[1:2, 0:2, 2:3] == dat[1:2, 0:2, 2:3]).all()
-        assert (d.section[1:2, 0:3, 0:1] == dat[1:2, 0:3, 0:1]).all()
-        assert (d.section[1:2, 0:3, 0:2] == dat[1:2, 0:3, 0:2]).all()
-        assert (d.section[1:2, 0:3, 0:3] == dat[1:2, 0:3, 0:3]).all()
-        assert (d.section[1:2, 0:3, 1:2] == dat[1:2, 0:3, 1:2]).all()
-        assert (d.section[1:2, 0:3, 1:3] == dat[1:2, 0:3, 1:3]).all()
-        assert (d.section[1:2, 0:3, 2:3] == dat[1:2, 0:3, 2:3]).all()
-        assert (d.section[1:2, 1:2, 0:1] == dat[1:2, 1:2, 0:1]).all()
-        assert (d.section[1:2, 1:2, 0:2] == dat[1:2, 1:2, 0:2]).all()
-        assert (d.section[1:2, 1:2, 0:3] == dat[1:2, 1:2, 0:3]).all()
-        assert (d.section[1:2, 1:2, 1:2] == dat[1:2, 1:2, 1:2]).all()
-        assert (d.section[1:2, 1:2, 1:3] == dat[1:2, 1:2, 1:3]).all()
-        assert (d.section[1:2, 1:2, 2:3] == dat[1:2, 1:2, 2:3]).all()
-        assert (d.section[1:2, 1:3, 0:1] == dat[1:2, 1:3, 0:1]).all()
-        assert (d.section[1:2, 1:3, 0:2] == dat[1:2, 1:3, 0:2]).all()
-        assert (d.section[1:2, 1:3, 0:3] == dat[1:2, 1:3, 0:3]).all()
-        assert (d.section[1:2, 1:3, 1:2] == dat[1:2, 1:3, 1:2]).all()
-        assert (d.section[1:2, 1:3, 1:3] == dat[1:2, 1:3, 1:3]).all()
-        assert (d.section[1:2, 1:3, 2:3] == dat[1:2, 1:3, 2:3]).all()
+        # Test that various combinations of indexing on the section are equal to
+        # indexing the data.
+        # Testing all combinations of scalar-index and [:] for each dimension.
+        for idx1 in [slice(None), 0, 1]:
+            for idx2 in [slice(None), 0, 1, 2]:
+                for idx3 in [slice(None), 0, 1, 2]:
+                    nd_idx = (idx1, idx2, idx3)
+                    assert (d.section[nd_idx] == dat[nd_idx]).all()
+
+        # Test all ways to slice the last dimension but keeping the first two.
+        for idx3 in [slice(0, 1), slice(0, 2), slice(0, 3),
+                     slice(1, 2), slice(1, 3), slice(2, 3)]:
+            nd_idx = (slice(None), slice(None), idx3)
+            assert (d.section[nd_idx] == dat[nd_idx]).all()
+
+        # Test various combinations (not exhaustive) to slice all dimensions.
+        for idx1 in [slice(0, 1), slice(1, 2)]:
+            for idx2 in [slice(0, 1), slice(0, 2), slice(0, 3),
+                         slice(1, 2), slice(1, 3)]:
+                for idx3 in [slice(0, 1), slice(0, 2), slice(0, 3),
+                             slice(1, 2), slice(1, 3), slice(2, 3)]:
+                    nd_idx = (idx1, idx2, idx3)
+                    assert (d.section[nd_idx] == dat[nd_idx]).all()
+
         hdul.close()
 
     def test_section_data_four(self):
@@ -726,8 +630,7 @@ class TestImageFunctions(FitsTestCase):
         """
         Regression test for https://github.com/astropy/astropy/issues/6399
         """
-        hdu1 = fits.PrimaryHDU()
-        hdu2 = fits.ImageHDU(np.random.rand(100,100))
+        hdu2 = fits.ImageHDU(np.random.rand(100, 100))
         # The line below raised an exception in astropy 2.0, so if it does not
         # raise an error here, that is progress.
         hdu2.scale(type='uint8', bscale=1, bzero=0)
@@ -1177,6 +1080,13 @@ class TestImageFunctions(FitsTestCase):
             hdu.data[:] = 0
             assert np.allclose(hdu.data, 0)
 
+    def test_hdu_creation_with_scalar(self):
+        msg = r'data object array\(1\) should have at least one dimension'
+        with pytest.raises(TypeError, match=msg):
+            fits.ImageHDU(data=1)
+        with pytest.raises(TypeError, match=msg):
+            fits.PrimaryHDU(data=1)
+
 
 class TestCompressedImage(FitsTestCase):
     def test_empty(self):
@@ -1506,7 +1416,8 @@ class TestCompressedImage(FitsTestCase):
     def test_lossless_gzip_compression(self):
         """Regression test for https://aeon.stsci.edu/ssb/trac/pyfits/ticket/198"""
 
-        noise = np.random.normal(size=(1000, 1000))
+        rng = np.random.RandomState(seed=42)
+        noise = rng.normal(size=(20, 20))
 
         chdu1 = fits.CompImageHDU(data=noise, compression_type='GZIP_1')
         # First make a test image with lossy compression and make sure it
@@ -1864,6 +1775,49 @@ class TestCompressedImage(FitsTestCase):
         with fits.open(self.temp('test.fits')) as hdu:
             assert hdu[1].header[keyword] == value
             assert hdu[1].data.dtype == expected
+
+    @pytest.mark.parametrize('dtype', (np.uint8, np.int16, np.uint16, np.int32,
+                                       np.uint32))
+    def test_compressed_integers(self, dtype):
+        """Test that the various integer dtypes are correctly written and read.
+
+        Regression test for https://github.com/astropy/astropy/issues/9072
+
+        """
+        mid = np.iinfo(dtype).max // 2
+        data = np.arange(mid-50, mid+50, dtype=dtype)
+        testfile = self.temp('test.fits')
+        hdu = fits.CompImageHDU(data=data)
+        hdu.writeto(testfile, overwrite=True)
+        new = fits.getdata(testfile)
+        np.testing.assert_array_equal(data, new)
+
+    def test_write_non_contiguous_data(self):
+        """
+        Regression test for https://github.com/astropy/astropy/issues/2150
+        """
+        orig = np.arange(100, dtype=float).reshape((10, 10), order='f')
+        assert not orig.flags.contiguous
+        primary = fits.PrimaryHDU()
+        hdu = fits.CompImageHDU(orig)
+        hdulist = fits.HDUList([primary, hdu])
+        hdulist.writeto(self.temp('test.fits'))
+
+        actual = fits.getdata(self.temp('test.fits'))
+        assert_equal(orig, actual)
+
+    def test_slice_and_write_comp_hdu(self):
+        """
+        Regression test for https://github.com/astropy/astropy/issues/9955
+        """
+        with fits.open(self.data('comp.fits')) as hdul:
+            hdul[1].data = hdul[1].data[:200, :100]
+            assert not hdul[1].data.flags.contiguous
+            hdul[1].writeto(self.temp('test.fits'))
+
+        with fits.open(self.data('comp.fits')) as hdul1:
+            with fits.open(self.temp('test.fits')) as hdul2:
+                assert_equal(hdul1[1].data[:200, :100], hdul2[1].data)
 
 
 def test_comphdu_bscale(tmpdir):

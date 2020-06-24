@@ -100,8 +100,9 @@ Some terminology
 
 It is possible to create new models just by
 combining existing models using the arithmetic operators ``+``, ``-``, ``*``,
-``/``, and ``**``, as well as by model composition using ``|`` and
-concatenation (explained below) with ``&``.
+``/``, and ``**``, or by model composition using ``|`` and
+concatenation (explained below) with ``&``, as well as using :func:`~astropy.modeling.fix_inputs`
+for :ref:`reducing the number of inputs to a model <model-reduction>`.
 
 
 In discussing the compound model feature, it is useful to be clear about a
@@ -131,8 +132,8 @@ few terms where there have been points of confusion:
       >>> Gaussian1D
       <class 'astropy.modeling.functional_models.Gaussian1D'>
       Name: Gaussian1D
-      Inputs: ('x',)
-      Outputs: ('y',)
+      N_inputs: 1
+      N_outputs: 1
       Fittable parameters: ('amplitude', 'mean', 'stddev')
 
   We can then create a model *instance* by passing in values for the three
@@ -156,8 +157,8 @@ few terms where there have been points of confusion:
 
 - A *compound model* can be created by combining two or more existing model instances
   which can be models that come with Astropy, :doc:`user defined models <new-model>`, or
-  other compound models--using Python expressions consisting of one or more of the s
-  upported binary operators. The combination of model classes is deprecated and will
+  other compound models--using Python expressions consisting of one or more of the
+  supported binary operators. The combination of model classes is deprecated and will
   be removed in version 4.0.
 
 - In some places the term *composite model* is used interchangeably with
@@ -520,40 +521,40 @@ transformation matrix::
     >>> allclose(scale_and_rotate(1, 2), affine(1, 2))
     True
 
-    Other Topics
-    ============
+Other Topics
+============
 
-    Model names
-    -----------
+Model names
+-----------
 
-    In the above two examples another notable feature of the generated compound
-    model classes is that the class name, as displayed when printing the class at
-    the command prompt, is not "TwoGaussians", "FourGaussians", etc.  Instead it is
-    a generated name consisting of "CompoundModel" followed by an essentially
-    arbitrary integer that is chosen simply so that every compound model has a
-    unique default name.  This is a limitation at present, due to the limitation
-    that it is not generally possible in Python when an object is created by an
-    expression for it to "know" the name of the variable it will be assigned to, if
-    any.
-    It is possible to directly assign a name to the compound model instance
-    by using the `Model.name <astropy.modeling.Model.name>` attribute.
+In the above two examples another notable feature of the generated compound
+model classes is that the class name, as displayed when printing the class at
+the command prompt, is not "TwoGaussians", "FourGaussians", etc.  Instead it is
+a generated name consisting of "CompoundModel" followed by an essentially
+arbitrary integer that is chosen simply so that every compound model has a
+unique default name.  This is a limitation at present, due to the limitation
+that it is not generally possible in Python when an object is created by an
+expression for it to "know" the name of the variable it will be assigned to, if
+any.
+It is possible to directly assign a name to the compound model instance
+by using the `Model.name <astropy.modeling.Model.name>` attribute::
 
-        >>> two_gaussians.name = "TwoGaussians"
-        >>> print(two_gaussians)  # doctest: +SKIP
-        Model: CompoundModel...
-        Name: TwoGaussians
-        Inputs: ('x',)
-        Outputs: ('y',)
-        Model set size: 1
-        Expression: [0] + [1]
-        Components:
-            [0]: <Gaussian1D(amplitude=1.1, mean=0.1, stddev=0.2)>
-            <BLANKLINE>
-            [1]: <Gaussian1D(amplitude=2.5, mean=0.5, stddev=0.1)>
-        Parameters:
-            amplitude_0 mean_0 stddev_0 amplitude_1 mean_1 stddev_1
-            ----------- ------ -------- ----------- ------ --------
-                    1.1    0.1      0.2         2.5    0.5      0.1
+    >>> two_gaussians.name = "TwoGaussians"
+    >>> print(two_gaussians)  # doctest: +SKIP
+    Model: CompoundModel...
+    Name: TwoGaussians
+    Inputs: ('x',)
+    Outputs: ('y',)
+    Model set size: 1
+    Expression: [0] + [1]
+    Components:
+        [0]: <Gaussian1D(amplitude=1.1, mean=0.1, stddev=0.2)>
+        <BLANKLINE>
+        [1]: <Gaussian1D(amplitude=2.5, mean=0.5, stddev=0.1)>
+    Parameters:
+        amplitude_0 mean_0 stddev_0 amplitude_1 mean_1 stddev_1
+        ----------- ------ -------- ----------- ------ --------
+                1.1    0.1      0.2         2.5    0.5      0.1
 
 .. _compound-model-indexing:
 
@@ -1369,3 +1370,58 @@ This opens up the possibility of essentially arbitrarily complex transformation
 graphs.  Currently the tools do not exist to make it easy to navigate and
 reason about highly complex compound models that use these mappings, but that
 is a possible enhancement for future versions.
+
+.. _model-reduction:
+
+Model Reduction
+---------------
+
+In order to save much duplication in the construction of complex models, it is
+possible to define one complex model that covers all cases where the
+variables that distinguish the models are made part of the model's input
+variables. The ``fix_inputs`` function allows defining models derived from
+the more complex one by setting one or more of the inputs to a constant
+value. Examples of this sort of situation arise when working out
+the transformations from detector pixel to RA, Dec, and lambda for
+spectrographs when the slit locations may be moved (e.g., fiber fed or
+commandable slit masks), or different orders may be selected (e.g., Eschelle).
+In the case of order, one may have a function of pixel ``x``, ``y``, ``spectral_order``
+that map into ``RA``, ``Dec`` and ``lambda``. Without specifying ``spectral_order``, it is
+ambiguious what ``RA``, ``Dec`` and ``Lambda`` corresponds to a pixel location. It
+is usually possible to define a function of all three inputs. Presuming
+this model is ``general_transform`` then ``fix_inputs`` may be used to define
+the transform for a specific order as follows:
+
+::
+     >>> order1_transform = fix_inputs(general_transform, {'order': 1})  # doctest: +SKIP
+
+creates a new compound model that takes only pixel position and generates
+``RA``, ``Dec``, and ``lambda``. The ``fix_inputs`` function can be used to set input
+values by position (0 is the first) or by input variable name, and more
+than one can be set in the dictionary supplied.
+
+If the input model has a bounding_box, the generated model will have the
+bounding for the input coordinate removed.
+
+
+.. test_replace_submodel
+
+Replace submodels
+-----------------
+
+
+:meth:`~astropy.modeling.core.CompoundModel.replace_submodel` creates a new model by
+replacing a submodel with a matching name with another submodel. The number of
+inputs and outputs of the old and new submodels should match.
+::
+
+    >>> from astropy.modeling import models
+    >>> shift = models.Shift(-1) & models.Shift(-1)
+    >>> scale = models.Scale(2) & models.Scale(3)
+    >>> scale.name = "Scale"
+    >>> model = shift | scale
+    >>> model(2, 1)  # doctest: +FLOAT_CMP
+    (2.0, 0.0)
+    >>> new_model = model.replace_submodel('Scale', models.Rotation2D(90, name='Rotation'))
+    >>> new_model(2, 1)  # doctest: +FLOAT_CMP
+    (6.12e-17, 1.0)

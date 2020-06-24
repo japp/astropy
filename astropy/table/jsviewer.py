@@ -155,7 +155,7 @@ class JSViewer:
 
     def ipynb(self, table_id, css=None, sort_columns='[]'):
         html = '<style>{}</style>'.format(css if css is not None
-                                           else DEFAULT_CSS_NB)
+                                          else DEFAULT_CSS_NB)
         html += IPYNB_JS_SCRIPT.format(
             display_length=self.display_length,
             display_length_menu=self.display_length_menu,
@@ -180,7 +180,7 @@ def write_table_jsviewer(table, filename, table_id=None, max_lines=5000,
     jsv = JSViewer(**jskwargs)
 
     sortable_columns = [i for i, col in enumerate(table.columns.values())
-                        if col.dtype.kind in 'iufc']
+                        if col.info.dtype.kind in 'iufc']
     html_options = {
         'table_id': table_id,
         'table_class': table_class,

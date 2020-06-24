@@ -1,17 +1,21 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
 import os
-import urllib.request
 import warnings
+from pathlib import Path
 
 import pytest
 import numpy as np
 
 from astropy.tests.helper import assert_quantity_allclose, catch_warnings
+from astropy.utils.data import get_pkg_data_filename
 from astropy.utils.iers import iers
 from astropy import units as u
 from astropy.table import QTable
 from astropy.time import Time, TimeDelta
+
+
+TRAVIS = os.environ.get('TRAVIS', False)
 
 FILE_NOT_FOUND_ERROR = getattr(__builtins__, 'FileNotFoundError', OSError)
 
@@ -22,18 +26,36 @@ except OSError:
 else:
     HAS_IERS_A = True
 
-IERS_A_EXCERPT = os.path.join(os.path.dirname(__file__), 'data', 'iers_a_excerpt')
+IERS_A_EXCERPT = get_pkg_data_filename(os.path.join('data', 'iers_a_excerpt'))
+
+
+def setup_module():
+    # Need auto_download so that IERS_B won't be loaded and cause tests to
+    # fail. Files to be downloaded are handled appropriately in the tests.
+    iers.conf.auto_download = True
+
+
+def teardown_module():
+    # This setting is to be consistent with astropy/conftest.py
+    iers.conf.auto_download = False
 
 
 class TestBasic():
     """Basic tests that IERS_B returns correct values"""
 
-    def test_simple(self):
-        iers.IERS.close()
-        assert iers.IERS.iers_table is None
-        iers_tab = iers.IERS.open()
-        assert iers.IERS.iers_table is not None
-        assert isinstance(iers.IERS.iers_table, QTable)
+    @pytest.mark.parametrize('iers_cls', (iers.IERS_B, iers.IERS))
+    def test_simple(self, iers_cls):
+        """Test the default behaviour for IERS_B and IERS."""
+        # Arguably, IERS itself should not be used at all, but it used to
+        # provide IERS_B by default so we check that it continues to do so.
+        # Eventually, IERS should probably be deprecated.
+        iers_cls.close()
+        assert iers_cls.iers_table is None
+        iers_tab = iers_cls.open()
+        assert iers_cls.iers_table is not None
+        assert iers_cls.iers_table is iers_tab
+        assert isinstance(iers_tab, QTable)
+        assert isinstance(iers_tab, iers.IERS_B)
         assert (iers_tab['UT1_UTC'].unit / u.second).is_unity()
         assert (iers_tab['PM_x'].unit / u.arcsecond).is_unity()
         assert (iers_tab['PM_y'].unit / u.arcsecond).is_unity()
@@ -66,17 +88,17 @@ class TestBasic():
         assert len(iers_tab[:2]) == 2
 
     def test_open_filename(self):
-        iers.IERS.close()
-        iers.IERS.open(iers.IERS_B_FILE)
-        assert iers.IERS.iers_table is not None
-        assert isinstance(iers.IERS.iers_table, QTable)
-        iers.IERS.close()
+        iers.IERS_B.close()
+        iers.IERS_B.open(iers.IERS_B_FILE)
+        assert iers.IERS_B.iers_table is not None
+        assert isinstance(iers.IERS_B.iers_table, QTable)
+        iers.IERS_B.close()
         with pytest.raises(FILE_NOT_FOUND_ERROR):
-            iers.IERS.open('surely this does not exist')
+            iers.IERS_B.open('surely this does not exist')
 
     def test_open_network_url(self):
         iers.IERS_A.close()
-        iers.IERS_A.open("file:" + urllib.request.pathname2url(IERS_A_EXCERPT))
+        iers.IERS_A.open(Path(IERS_A_EXCERPT).as_uri())
         assert iers.IERS_A.iers_table is not None
         assert isinstance(iers.IERS_A.iers_table, QTable)
         iers.IERS_A.close()
@@ -184,10 +206,12 @@ class TestIERS_Auto():
         """
         self.N = 40
         self.ame = 30.0
-        self.iers_a_file_1 = os.path.join(os.path.dirname(__file__), 'data', 'finals2000A-2016-02-30-test')
-        self.iers_a_file_2 = os.path.join(os.path.dirname(__file__), 'data', 'finals2000A-2016-04-30-test')
-        self.iers_a_url_1 = os.path.normpath('file://' + os.path.abspath(self.iers_a_file_1))
-        self.iers_a_url_2 = os.path.normpath('file://' + os.path.abspath(self.iers_a_file_2))
+        self.iers_a_file_1 = get_pkg_data_filename(
+            os.path.join('data', 'finals2000A-2016-02-30-test'))
+        self.iers_a_file_2 = get_pkg_data_filename(
+            os.path.join('data', 'finals2000A-2016-04-30-test'))
+        self.iers_a_url_1 = Path(self.iers_a_file_1).as_uri()
+        self.iers_a_url_2 = Path(self.iers_a_file_2).as_uri()
         self.t = Time.now() + TimeDelta(10, format='jd') * np.arange(self.N)
 
     def teardown_method(self, method):
@@ -231,10 +255,9 @@ class TestIERS_Auto():
             with iers.conf.set_temp('auto_max_age', 5.0):
                 with pytest.raises(ValueError) as err:
                     iers_table = iers.IERS_Auto.open()
-                    delta = iers_table.ut1_utc(self.t.jd1, self.t.jd2)
+                    _ = iers_table.ut1_utc(self.t.jd1, self.t.jd2)
         assert str(err.value) == 'IERS auto_max_age configuration value must be larger than 10 days'
 
-    @pytest.mark.remote_data
     def test_no_auto_download(self):
         with iers.conf.set_temp('auto_download', False):
             t = iers.IERS_Auto.open()
@@ -256,14 +279,14 @@ class TestIERS_Auto():
             # Look at times before and after the test file begins.  0.1292905 is
             # the IERS-B value from MJD=57359.  The value in
             # finals2000A-2016-02-30-test has been replaced at this point.
-            assert np.allclose(dat.ut1_utc(Time(50000, format='mjd').jd).value, 0.1292905)
+            assert np.allclose(dat.ut1_utc(Time(50000, format='mjd').jd).value, 0.1293286)
             assert np.allclose(dat.ut1_utc(Time(60000, format='mjd').jd).value, -0.2246227)
 
             # Now pretend we are accessing at time 60 days after start of predictive data.
             # There will be a warning when downloading the file doesn't give new data
             # and an exception when extrapolating into the future with insufficient data.
             dat._time_now = Time(predictive_mjd, format='mjd') + 60 * u.d
-            assert np.allclose(dat.ut1_utc(Time(50000, format='mjd').jd).value, 0.1292905)
+            assert np.allclose(dat.ut1_utc(Time(50000, format='mjd').jd).value, 0.1293286)
             with catch_warnings(iers.IERSStaleWarning) as warns:
                 with pytest.raises(ValueError) as err:
                     dat.ut1_utc(Time(60000, format='mjd').jd)
@@ -291,9 +314,69 @@ class TestIERS_Auto():
         with iers.conf.set_temp('iers_auto_url', self.iers_a_url_2):
 
             # Look at times before and after the test file begins.  This forces a new download.
-            assert np.allclose(dat.ut1_utc(Time(50000, format='mjd').jd).value, 0.1292905)
+            assert np.allclose(dat.ut1_utc(Time(50000, format='mjd').jd).value, 0.1293286)
             assert np.allclose(dat.ut1_utc(Time(60000, format='mjd').jd).value, -0.3)
 
             # Now the time range should be different.
             assert dat['MJD'][0] == 57359.0 * u.d
             assert dat['MJD'][-1] == (57539.0 + 60) * u.d
+
+
+@pytest.mark.remote_data
+def test_IERS_B_parameters_loading_into_IERS_Auto():
+    A = iers.IERS_Auto.open()
+    B = iers.IERS_B.open()
+
+    ok_A = A["MJD"] <= B["MJD"][-1]
+    assert not np.all(ok_A), "IERS B covers all of IERS A: should not happen"
+
+    # We only overwrite IERS_B values in the IERS_A table that were already
+    # there in the first place.  Better take that into account.
+    ok_A &= np.isfinite(A["UT1_UTC_B"])
+
+    i_B = np.searchsorted(B["MJD"], A["MJD"][ok_A])
+
+    assert np.all(np.diff(i_B) == 1), "Valid region not contiguous"
+    assert np.all(A["MJD"][ok_A] == B["MJD"][i_B])
+    # Check that values are copied correctly.  Since units are not
+    # necessarily the same, we use allclose with very strict tolerance.
+    for name in ("UT1_UTC", "PM_x", "PM_y", "dX_2000A", "dY_2000A"):
+        assert_quantity_allclose(
+            A[name][ok_A], B[name][i_B], rtol=1e-15,
+            err_msg=("Bug #9206 IERS B parameter {} not copied over "
+                     "correctly to IERS Auto".format(name)))
+
+
+# Issue with FTP, rework test into previous one when it's fixed
+@pytest.mark.xfail('TRAVIS')
+@pytest.mark.remote_data
+def test_iers_a_dl():
+    iersa_tab = iers.IERS_A.open(iers.IERS_A_URL, cache=False)
+    try:
+        # some basic checks to ensure the format makes sense
+        assert len(iersa_tab) > 0
+        assert 'UT1_UTC_A' in iersa_tab.colnames
+    finally:
+        iers.IERS_A.close()
+
+
+@pytest.mark.remote_data
+def test_iers_a_dl_mirror():
+    iersa_tab = iers.IERS_A.open(iers.IERS_A_URL_MIRROR, cache=False)
+    try:
+        # some basic checks to ensure the format makes sense
+        assert len(iersa_tab) > 0
+        assert 'UT1_UTC_A' in iersa_tab.colnames
+    finally:
+        iers.IERS_A.close()
+
+
+@pytest.mark.remote_data
+def test_iers_b_dl():
+    iersb_tab = iers.IERS_B.open(iers.IERS_B_URL, cache=False)
+    try:
+        # some basic checks to ensure the format makes sense
+        assert len(iersb_tab) > 0
+        assert 'UT1_UTC' in iersb_tab.colnames
+    finally:
+        iers.IERS_B.close()

@@ -9,7 +9,6 @@
 #
 # All configuration values have a default. Some values are defined in
 # the global Astropy configuration which is loaded here before anything else.
-# See astropy.sphinx.conf for which values are set there.
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
@@ -24,10 +23,13 @@
 # version in the build directory (if "python setup.py build_docs" is used).
 # Thus, any C-extensions that are needed to build the documentation will *not*
 # be accessible, and the documentation will not build correctly.
+# See sphinx_astropy.conf for which values are set there.
 
 from datetime import datetime
 import os
 import sys
+
+from pkg_resources import get_distribution
 
 import astropy
 
@@ -59,8 +61,8 @@ needs_sphinx = '1.7'
 # major.minor, call `check_sphinx_version("x.y.z")` here.
 check_sphinx_version("1.2.1")
 
-# The intersphinx_mapping in astropy_helpers.sphinx.conf refers to astropy for
-# the benefit of affiliated packages who want to refer to objects in the
+# The intersphinx_mapping in sphinx_astropy.sphinx refers to astropy for
+# the benefit of other packages who want to refer to objects in the
 # astropy core.  However, we don't want to cyclically reference astropy in its
 # own build so we remove it here.
 del intersphinx_mapping['astropy']
@@ -68,7 +70,7 @@ del intersphinx_mapping['astropy']
 # add any custom intersphinx for astropy
 intersphinx_mapping['pytest'] = ('https://pytest.readthedocs.io/en/stable/', None)
 intersphinx_mapping['ipython'] = ('https://ipython.readthedocs.io/en/stable/', None)
-intersphinx_mapping['pandas'] = ('http://pandas.pydata.org/pandas-docs/stable/', None)
+intersphinx_mapping['pandas'] = ('https://pandas.pydata.org/pandas-docs/stable/', None)
 intersphinx_mapping['sphinx_automodapi'] = ('https://sphinx-automodapi.readthedocs.io/en/stable/', None)
 intersphinx_mapping['packagetemplate'] = ('http://docs.astropy.org/projects/package-template/en/latest/', None)
 intersphinx_mapping['h5py'] = ('http://docs.h5py.org/en/stable/', None)
@@ -84,15 +86,16 @@ if 'templates_path' not in locals():  # in case parent conf.py defines it
     templates_path = []
 templates_path.append('_templates')
 
-
 # This is added to the end of RST files - a good place to put substitutions to
 # be used globally.
 rst_epilog += """
 .. |minimum_python_version| replace:: {0.__minimum_python_version__}
 .. |minimum_numpy_version| replace:: {0.__minimum_numpy_version__}
+.. |minimum_scipy_version| replace:: {0.__minimum_scipy_version__}
+.. |minimum_yaml_version| replace:: {0.__minimum_yaml_version__}
+.. |minimum_asdf_version| replace:: {0.__minimum_asdf_version__}
 
 .. Astropy
-.. _Astropy: http://astropy.org
 .. _`Astropy mailing list`: https://mail.python.org/mailman/listinfo/astropy
 .. _`astropy-dev mailing list`: http://groups.google.com/group/astropy-dev
 """.format(astropy)
@@ -107,11 +110,10 @@ copyright = u'2011–{0}, '.format(datetime.utcnow().year) + author
 # |version| and |release|, also used in various other places throughout the
 # built documents.
 
-# The short X.Y version.
-version = astropy.__version__.split('-', 1)[0]
 # The full version, including alpha/beta/rc tags.
-release = astropy.__version__
-
+release = get_distribution(project).version
+# The short X.Y version.
+version = '.'.join(release.split('.')[:2])
 
 # -- Options for the module index ---------------------------------------------
 
@@ -192,6 +194,7 @@ man_pages = [('index', project.lower(), project + u' Documentation',
 
 # Setting this URL is requited by sphinx-astropy
 github_issues_url = 'https://github.com/astropy/astropy/issues/'
+edit_on_github_branch = 'master'
 
 # Enable nitpicky mode - which ensures that all references in the docs
 # resolve.
@@ -219,11 +222,17 @@ try:
         'gallery_dirs': 'generated/examples', # path to save gallery generated examples
         'reference_url': {
             'astropy': None,
-            'matplotlib': 'http://matplotlib.org/',
+            'matplotlib': 'https://matplotlib.org/',
             'numpy': 'http://docs.scipy.org/doc/numpy/',
         },
         'abort_on_example_error': True
     }
+
+    # Filter out backend-related warnings as described in
+    # https://github.com/sphinx-gallery/sphinx-gallery/pull/564
+    warnings.filterwarnings("ignore", category=UserWarning,
+                            message='Matplotlib is currently using agg, which is a'
+                                    ' non-GUI backend, so cannot show the figure.')
 
 except ImportError:
     def setup(app):
@@ -243,6 +252,10 @@ except ImportError:
 # -- Options for linkcheck output -------------------------------------------
 linkcheck_retry = 5
 linkcheck_ignore = ['https://journals.aas.org/manuscript-preparation/',
+                    'https://maia.usno.navy.mil/',
+                    'https://www.usno.navy.mil/USNO/time/gps/usno-gps-time-transfer',
+                    'https://aa.usno.navy.mil/publications/docs/Circular_179.php',
+                    'http://data.astropy.org',
                     r'https://github\.com/astropy/astropy/(?:issues|pull)/\d+']
 linkcheck_timeout = 180
 linkcheck_anchors = False

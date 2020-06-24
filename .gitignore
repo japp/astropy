@@ -55,6 +55,7 @@ venv
 .coverage
 cover
 htmlcov
+.hypothesis
 
 # Mac OSX
 .DS_Store
@@ -68,3 +69,6 @@ v
 
 # VSCode
 .vscode
+
+.tmp
+pip-wheel-metadata

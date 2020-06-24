@@ -16,7 +16,7 @@ from .angles import Angle
 __all__ = ['Distance']
 
 
-__doctest_requires__ = {'*': ['scipy.integrate']}
+__doctest_requires__ = {'*': ['scipy']}
 
 
 class Distance(u.SpecificTypeQuantity):
@@ -79,9 +79,7 @@ class Distance(u.SpecificTypeQuantity):
     Examples
     --------
     >>> from astropy import units as u
-    >>> from astropy import cosmology
     >>> from astropy.cosmology import WMAP5, WMAP7
-    >>> cosmology.set_current(WMAP7)
     >>> d1 = Distance(10, u.Mpc)
     >>> d2 = Distance(40, unit=u.au)
     >>> d3 = Distance(value=5, unit=u.kpc)
@@ -180,7 +178,12 @@ class Distance(u.SpecificTypeQuantity):
             cls, value, unit, dtype=dtype, copy=copy, order=order,
             subok=subok, ndmin=ndmin)
 
-        if not allow_negative and np.any(distance.value < 0):
+        # This invalid catch block can be removed when the minimum numpy
+        # version is >= 1.19 (NUMPY_LT_1_19)
+        with np.errstate(invalid='ignore'):
+            any_negative = np.any(distance.value < 0)
+
+        if not allow_negative and any_negative:
             raise ValueError("Distance must be >= 0.  Use the argument "
                              "'allow_negative=True' to allow negative values.")
 

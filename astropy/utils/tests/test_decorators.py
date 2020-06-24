@@ -1,6 +1,5 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-import functools
 import inspect
 import pickle
 
@@ -466,19 +465,27 @@ def test_deprecated_argument_not_allowed_use():
 
 def test_deprecated_argument_remove():
     @deprecated_renamed_argument('x', None, '2.0', alternative='astropy.y')
-    def test(dummy=11):
-        return dummy
+    def test(dummy=11, x=3):
+        return dummy, x
 
     with catch_warnings(AstropyDeprecationWarning) as w:
-        assert test(x=1) == 11
+        assert test(x=1) == (11, 1)
         assert len(w) == 1
         assert 'Use astropy.y instead' in str(w[0].message)
 
     with catch_warnings(AstropyDeprecationWarning) as w:
-        assert test(x=1, dummy=10) == 10
+        assert test(x=1, dummy=10) == (10, 1)
         assert len(w) == 1
 
-    assert test() == 11
+    with pytest.warns(AstropyDeprecationWarning,
+                      match=r'Use astropy.y instead'):
+        test(121, 1) == (121, 1)
+
+    with catch_warnings(AstropyDeprecationWarning) as w:
+        assert test() == (11, 3)
+        assert test(121) == (121, 3)
+        assert test(dummy=121) == (121, 3)
+        assert len(w) == 0
 
 
 def test_sharedmethod_reuse_on_subclasses():

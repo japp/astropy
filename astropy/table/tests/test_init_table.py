@@ -6,7 +6,7 @@ from collections.abc import Mapping
 import pytest
 import numpy as np
 
-from astropy.table import Column, TableColumns
+from astropy.table import Column, TableColumns, Table, MaskedColumn
 
 
 class TestTableColumnsInit():
@@ -157,7 +157,7 @@ class TestInitFromListOfLists(BaseInitFromListLike):
     def test_partial_names_dtype(self, table_type):
         self._setup(table_type)
         t = table_type(self.data, names=['b', None, 'c'],
-                  dtype=['f4', None, 'f8'])
+                       dtype=['f4', None, 'f8'])
         assert t.colnames == ['b', 'col1', 'c']
         assert t['b'].dtype.type == np.float32
         assert t['col1'].dtype.type == np.int32
@@ -168,7 +168,7 @@ class TestInitFromListOfLists(BaseInitFromListLike):
         self._setup(table_type)
         with pytest.raises(ValueError):
             table_type([[1, 2],
-                   [3, 4, 5]])
+                        [3, 4, 5]])
 
 
 @pytest.mark.usefixtures('table_type')
@@ -188,11 +188,21 @@ class TestInitFromListOfDicts(BaseInitFromListLike):
         t = table_type(self.data, names=('c', 'b', 'a'))
         assert t.colnames == ['c', 'b', 'a']
 
-    def test_bad_data(self, table_type):
-        self._setup(table_type)
-        with pytest.raises(ValueError):
-            table_type([{'a': 1, 'b': 2, 'c': 3},
-                   {'a': 2, 'b': 4}])
+    def test_missing_data_init_from_dict(self, table_type):
+        dat = [{'a': 1, 'b': 2},
+               {'a': 2, 'c': 4}]
+        for rows in [False, True]:
+            t = table_type(rows=dat) if rows else table_type(dat)
+
+            assert np.all(t['a'] == [1, 2])
+            assert np.all(t['b'].mask == [False, True])
+            assert np.all(t['b'].data == [2, 2])
+            assert np.all(t['c'].mask == [True, False])
+            assert np.all(t['c'].data == [4, 4])
+
+            assert type(t['a']) is (MaskedColumn if t.masked else Column)
+            assert type(t['b']) is MaskedColumn
+            assert type(t['c']) is MaskedColumn
 
 
 @pytest.mark.usefixtures('table_type')
@@ -517,5 +527,9 @@ def test_init_from_row_OrderedDict(table_type):
     assert t1.colnames == ['b', 'a']
     assert t2.colnames == ['a', 'b']
 
-    with pytest.raises(ValueError):
-        table_type(rows=[OrderedDict([('b', 1)]), {'a': 10, 'b': 20}])
+
+def test_init_from_rows_as_generator():
+    rows = ((1 + ii, 2 + ii) for ii in range(2))
+    t = Table(rows=rows)
+    assert np.all(t['col0'] == [1, 2])
+    assert np.all(t['col1'] == [2, 3])

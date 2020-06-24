@@ -8,14 +8,14 @@ import astropy.units as u
 from astropy import table
 from astropy.time import Time, TimeDelta
 from astropy.coordinates import SkyCoord, EarthLocation
-from astropy.table.tests.test_operations import skycoord_equal
+from astropy.io.misc.asdf.tags.helpers import skycoord_equal
 
 from astropy import __minimum_asdf_version__
 asdf = pytest.importorskip('asdf', minversion=__minimum_asdf_version__)
 from asdf.tests import helpers
 from asdf.tags.core.ndarray import NDArrayType
 
-from ...tests.helpers import run_schema_example_test
+from astropy.io.misc.asdf.tags.tests.helpers import run_schema_example_test
 
 
 def test_table(tmpdir):

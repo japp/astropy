@@ -150,6 +150,12 @@ class DexUnit(LogUnit):
     def _quantity_class(self):
         return Dex
 
+    def to_string(self, format='generic'):
+        if format == 'cds':
+            return "[{}]".format(self.physical_unit.to_string(format=format))
+        else:
+            return super(DexUnit, self).to_string()
+
 
 class DecibelUnit(LogUnit):
     """Logarithmic physical units expressed in dB
@@ -187,7 +193,7 @@ class LogQuantity(FunctionQuantity):
         it will converted to the logarithmic unit, after, if necessary,
         converting it to the physical unit inferred from ``unit``.
 
-    unit : string, `~astropy.units.UnitBase` or `~astropy.units.function.FunctionUnitBase` instance, optional
+    unit : str, `~astropy.units.UnitBase`, or `~astropy.units.function.FunctionUnitBase`, optional
         For an `~astropy.units.function.FunctionUnitBase` instance, the
         physical unit will be taken from it; for other input, it will be
         inferred from ``value``. By default, ``unit`` is set by the subclass.

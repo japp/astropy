@@ -96,6 +96,21 @@ Advanced Topics
    Adding support for units to models <add-units.rst>
 
 
+Pre-Defined Models
+==================
+
+.. To be expanded to include all pre-defined models
+
+Some of the pre-defined models are listed and illustrated.
+
+.. toctree::
+   :maxdepth: 2
+
+   1D Models <predef_models1D.rst>
+   2D Models <predef_models2D.rst>
+   Physical Models <physical_models.rst>
+   Polynomial Models <polynomial_models.rst>
+
 Examples
 ========
 
@@ -117,7 +132,7 @@ Examples
     defining and using a Tabular1D model
     statistics functions and how to make your own
     compound models
-    model sets w/ fitting
+
 
 Reference/API
 =============

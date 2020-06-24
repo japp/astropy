@@ -16,14 +16,14 @@ Examples
 ...                fill_value=None, method='nearest')
 
 """
-
+# pylint: disable=invalid-name
 import abc
 
 import numpy as np
 
-from .core import Model
 from astropy import units as u
 from astropy.utils import minversion
+from .core import Model
 
 try:
     import scipy
@@ -47,7 +47,7 @@ class _Tabular(Model):
     ----------
     points : tuple of ndarray of float, with shapes (m1, ), ..., (mn, ), optional
         The points defining the regular grid in n dimensions.
-    lookup_table : array-like, shape (m1, ..., mn, ...)
+    lookup_table : array_like, shape (m1, ..., mn, ...)
         The data on a regular grid in n dimensions.
     method : str, optional
         The method of interpolation to perform. Supported are "linear" and
@@ -84,7 +84,6 @@ class _Tabular(Model):
     fittable = False
 
     standard_broadcasting = False
-    outputs = ('y',)
 
     @property
     @abc.abstractmethod
@@ -102,7 +101,7 @@ class _Tabular(Model):
         if n_models > 1:
             raise NotImplementedError('Only n_models=1 is supported.')
         super().__init__(**kwargs)
-
+        self.outputs = ("y",)
         if lookup_table is None:
             raise ValueError('Must provide a lookup table.')
 
@@ -149,8 +148,8 @@ class _Tabular(Model):
         default_keywords = [
             ('Model', self.__class__.__name__),
             ('Name', self.name),
-            ('Inputs', self.inputs),
-            ('Outputs', self.outputs),
+            ('N_inputs', self.n_inputs),
+            ('N_outputs', self.n_outputs),
             ('Parameters', ""),
             ('  points', self.points),
             ('  lookup_table', self.lookup_table),
@@ -170,15 +169,13 @@ class _Tabular(Model):
         pts = self.points[0]
         if not isinstance(pts, u.Quantity):
             return None
-        else:
-            return dict([(x, pts.unit) for x in self.inputs])
+        return dict([(x, pts.unit) for x in self.inputs])
 
     @property
     def return_units(self):
         if not isinstance(self.lookup_table, u.Quantity):
             return None
-        else:
-            return {'y': self.lookup_table.unit}
+        return {self.outputs[0]: self.lookup_table.unit}
 
     @property
     def bounding_box(self):
@@ -252,10 +249,10 @@ class _Tabular(Model):
             else:
                 # equal-valued or double-valued lookup_table
                 raise NotImplementedError
-            return Tabular1D(points=points, lookup_table=lookup_table)
-        else:
-            raise NotImplementedError("An analytical inverse transform "
-                "has not been implemented for this model.")
+            return Tabular1D(points=points, lookup_table=lookup_table, method=self.method,
+                             bounds_error=self.bounds_error, fill_value=self.fill_value)
+        raise NotImplementedError("An analytical inverse transform "
+                                  "has not been implemented for this model.")
 
 
 def tabular_model(dim, name=None):
@@ -283,8 +280,8 @@ def tabular_model(dim, name=None):
     >>> print(tab)
     <class 'abc.Tabular2D'>
     Name: Tabular2D
-    Inputs: (u'x0', u'x1')
-    Outputs: (u'y',)
+    N_inputs: 2
+    N_outputs: 1
 
     >>> points = ([1, 2, 3], [1, 2, 3])
 
@@ -301,8 +298,7 @@ def tabular_model(dim, name=None):
         raise ValueError('Lookup table must have at least one dimension.')
 
     table = np.zeros([2] * dim)
-    inputs = tuple(f'x{idx}' for idx in range(table.ndim))
-    members = {'lookup_table': table, 'inputs': inputs}
+    members = {'lookup_table': table, 'n_inputs': dim, 'n_outputs': 1}
 
     if dim == 1:
         members['_separable'] = True
@@ -357,9 +353,9 @@ Tabular1D.__doc__ = """
 
     Parameters
     ----------
-    points : array-like of float of ndim=1.
+    points : array_like of float of ndim=1.
         The points defining the regular grid in n dimensions.
-    lookup_table : array-like, of ndim=1.
+    lookup_table : array_like, of ndim=1.
         The data in one dimensions.
 """ + _tab_docs
 
@@ -371,7 +367,7 @@ Tabular2D.__doc__ = """
     ----------
     points : tuple of ndarray of float, with shapes (m1, m2), optional
         The points defining the regular grid in n dimensions.
-    lookup_table : array-like, shape (m1, m2)
+    lookup_table : array_like, shape (m1, m2)
         The data on a regular grid in 2 dimensions.
 
 """ + _tab_docs

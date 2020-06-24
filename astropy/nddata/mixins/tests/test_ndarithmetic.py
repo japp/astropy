@@ -1,19 +1,20 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-
 import pytest
 import numpy as np
 from numpy.testing import assert_array_equal, assert_array_almost_equal
 
-from astropy.nddata.nduncertainty import (StdDevUncertainty, VarianceUncertainty,
-                              InverseVariance,
-                              UnknownUncertainty,
-                              IncompatibleUncertaintiesException)
+from astropy.nddata.nduncertainty import (
+    StdDevUncertainty, VarianceUncertainty,
+    InverseVariance,
+    UnknownUncertainty,
+    IncompatibleUncertaintiesException)
 from astropy.nddata import NDDataRef
-from astropy.nddata.nddata import NDData
+from astropy.nddata import _testing as nd_testing
 
 from astropy.units import UnitsError, Quantity
 from astropy import units as u
+from astropy.wcs import WCS
 
 
 # Alias NDDataAllMixins in case this will be renamed ... :-)
@@ -29,6 +30,7 @@ class StdDevUncertaintyUncorrelated(StdDevUncertainty):
 # Test with Data covers:
 # scalars, 1D, 2D and 3D
 # broadcasting between them
+@pytest.mark.filterwarnings("ignore:divide by zero encountered in true_divide")
 @pytest.mark.parametrize(('data1', 'data2'), [
                          (np.array(5), np.array(10)),
                          (np.array(5), np.arange(10)),
@@ -83,6 +85,7 @@ def test_arithmetics_data_invalid():
 # identical units (even dimensionless unscaled vs. no unit),
 # equivalent units (such as meter and kilometer)
 # equivalent composite units (such as m/s and km/h)
+@pytest.mark.filterwarnings("ignore:divide by zero encountered in true_divide")
 @pytest.mark.parametrize(('data1', 'data2'), [
     (np.array(5) * u.s, np.array(10) * u.s),
     (np.array(5) * u.s, np.arange(10) * u.h),
@@ -184,10 +187,10 @@ def test_arithmetics_data_unit_not_identical(data1, data2):
 # None set
 @pytest.mark.parametrize(('wcs1', 'wcs2'), [
     (None, None),
-    (None, 5),
-    (5, None),
-    (5, 5),
-    (7, 5),
+    (None, WCS(naxis=2)),
+    (WCS(naxis=2), None),
+    nd_testing.create_two_equal_wcs(naxis=2),
+    nd_testing.create_two_unequal_wcs(naxis=2),
     ])
 def test_arithmetics_data_wcs(wcs1, wcs2):
 
@@ -205,16 +208,16 @@ def test_arithmetics_data_wcs(wcs1, wcs2):
 
     # Addition
     nd3 = nd1.add(nd2)
-    assert ref_wcs == nd3.wcs
+    nd_testing.assert_wcs_seem_equal(ref_wcs, nd3.wcs)
     # Subtraction
     nd4 = nd1.subtract(nd2)
-    assert ref_wcs == nd3.wcs
+    nd_testing.assert_wcs_seem_equal(ref_wcs, nd4.wcs)
     # Multiplication
     nd5 = nd1.multiply(nd2)
-    assert ref_wcs == nd3.wcs
+    nd_testing.assert_wcs_seem_equal(ref_wcs, nd5.wcs)
     # Division
     nd6 = nd1.divide(nd2)
-    assert ref_wcs == nd3.wcs
+    nd_testing.assert_wcs_seem_equal(ref_wcs, nd6.wcs)
     for nd in [nd3, nd4, nd5, nd6]:
         # Check all other attributes are not set
         assert nd.unit is None
@@ -530,6 +533,7 @@ def test_arithmetics_varianceuncertainty_basic_with_correlation(
 # The point of this test is to compare the used formula to the theoretical one.
 # TODO: Maybe covering units too but I think that should work because of
 # the next tests. Also this may be reduced somehow.
+@pytest.mark.filterwarnings("ignore:divide by zero encountered in true_divide")
 @pytest.mark.parametrize(('cor', 'uncert1', 'data2'), [
     (-1, [1, 1, 3], [2, 2, 7]),
     (-0.5, [1, 1, 3], [2, 2, 7]),
@@ -706,6 +710,7 @@ def test_arithmetics_stddevuncertainty_one_missing():
 # Covering:
 # data with unit and uncertainty with unit (but equivalent units)
 # compared against correctly scaled NDDatas
+@pytest.mark.filterwarnings("ignore:.*encountered in true_divide.*")
 @pytest.mark.parametrize(('uncert1', 'uncert2'), [
     (np.array([1, 2, 3]) * u.m, None),
     (np.array([1, 2, 3]) * u.cm, None),
@@ -809,6 +814,7 @@ def test_arithmetics_stddevuncertainty_with_units(uncert1, uncert2):
 # Covering:
 # data with unit and uncertainty with unit (but equivalent units)
 # compared against correctly scaled NDDatas
+@pytest.mark.filterwarnings("ignore:.*encountered in true_divide.*")
 @pytest.mark.parametrize(('uncert1', 'uncert2'), [
     (np.array([1, 2, 3]) * u.m, None),
     (np.array([1, 2, 3]) * u.cm, None),
@@ -912,6 +918,7 @@ def test_arithmetics_varianceuncertainty_with_units(uncert1, uncert2):
 # Covering:
 # data with unit and uncertainty with unit (but equivalent units)
 # compared against correctly scaled NDDatas
+@pytest.mark.filterwarnings("ignore:.*encountered in true_divide.*")
 @pytest.mark.parametrize(('uncert1', 'uncert2'), [
     (np.array([1, 2, 3]) * u.m, None),
     (np.array([1, 2, 3]) * u.cm, None),
@@ -1021,8 +1028,7 @@ def test_arithmetics_handle_switches(use_abbreviation):
     mask2 = False
     uncertainty1 = StdDevUncertainty([1, 2, 3])
     uncertainty2 = StdDevUncertainty([1, 2, 3])
-    wcs1 = 5
-    wcs2 = 100
+    wcs1, wcs2 = nd_testing.create_two_unequal_wcs(naxis=1)
     data1 = [1, 1, 1]
     data2 = [1, 1, 1]
 
@@ -1044,7 +1050,7 @@ def test_arithmetics_handle_switches(use_abbreviation):
     nd_ = nd3.add(nd2, propagate_uncertainties=False,
                   handle_meta=use_abbreviation, handle_mask=use_abbreviation,
                   compare_wcs=use_abbreviation)
-    assert nd_.wcs == wcs2
+    nd_testing.assert_wcs_seem_equal(nd_.wcs, wcs2)
     assert nd_.meta == meta2
     assert nd_.mask == mask2
     assert_array_equal(nd_.uncertainty.array, uncertainty2.array)
@@ -1053,7 +1059,7 @@ def test_arithmetics_handle_switches(use_abbreviation):
     nd_ = nd1.add(nd3, propagate_uncertainties=False,
                   handle_meta=use_abbreviation, handle_mask=use_abbreviation,
                   compare_wcs=use_abbreviation)
-    assert nd_.wcs == wcs1
+    nd_testing.assert_wcs_seem_equal(nd_.wcs, wcs1)
     assert nd_.meta == meta1
     assert nd_.mask == mask1
     assert_array_equal(nd_.uncertainty.array, uncertainty1.array)
@@ -1072,14 +1078,12 @@ def test_arithmetics_meta_func():
     mask2 = False
     uncertainty1 = StdDevUncertainty([1, 2, 3])
     uncertainty2 = StdDevUncertainty([1, 2, 3])
-    wcs1 = 5
-    wcs2 = 100
     data1 = [1, 1, 1]
     data2 = [1, 1, 1]
 
-    nd1 = NDDataArithmetic(data1, meta=meta1, mask=mask1, wcs=wcs1,
+    nd1 = NDDataArithmetic(data1, meta=meta1, mask=mask1,
                            uncertainty=uncertainty1)
-    nd2 = NDDataArithmetic(data2, meta=meta2, mask=mask2, wcs=wcs2,
+    nd2 = NDDataArithmetic(data2, meta=meta2, mask=mask2,
                            uncertainty=uncertainty2)
 
     nd3 = nd1.add(nd2, handle_meta=meta_fun_func)
@@ -1096,10 +1100,9 @@ def test_arithmetics_meta_func():
 
 def test_arithmetics_wcs_func():
     def wcs_comp_func(wcs1, wcs2, tolerance=0.1):
-        if abs(wcs1 - wcs2) <= tolerance:
-            return True
-        else:
+        if tolerance < 0.01:
             return False
+        return True
 
     meta1 = {'a': 1}
     meta2 = {'a': 3, 'b': 2}
@@ -1107,8 +1110,7 @@ def test_arithmetics_wcs_func():
     mask2 = False
     uncertainty1 = StdDevUncertainty([1, 2, 3])
     uncertainty2 = StdDevUncertainty([1, 2, 3])
-    wcs1 = 99.99
-    wcs2 = 100
+    wcs1, wcs2 = nd_testing.create_two_equal_wcs(naxis=1)
     data1 = [1, 1, 1]
     data2 = [1, 1, 1]
 
@@ -1118,11 +1120,14 @@ def test_arithmetics_wcs_func():
                            uncertainty=uncertainty2)
 
     nd3 = nd1.add(nd2, compare_wcs=wcs_comp_func)
-    assert nd3.wcs == 99.99
+    nd_testing.assert_wcs_seem_equal(nd3.wcs, wcs1)
 
+    # Fails because the function fails
     with pytest.raises(ValueError):
         nd1.add(nd2, compare_wcs=wcs_comp_func, wcs_tolerance=0.00001)
 
+    # Fails because for a parameter to be passed correctly to the function it
+    # needs the wcs_ prefix
     with pytest.raises(KeyError):
         nd1.add(nd2, compare_wcs=wcs_comp_func, tolerance=1)
 
@@ -1140,14 +1145,12 @@ def test_arithmetics_mask_func():
     mask2 = [True, False, False]
     uncertainty1 = StdDevUncertainty([1, 2, 3])
     uncertainty2 = StdDevUncertainty([1, 2, 3])
-    wcs1 = 99.99
-    wcs2 = 100
     data1 = [1, 1, 1]
     data2 = [1, 1, 1]
 
-    nd1 = NDDataArithmetic(data1, meta=meta1, mask=mask1, wcs=wcs1,
+    nd1 = NDDataArithmetic(data1, meta=meta1, mask=mask1,
                            uncertainty=uncertainty1)
-    nd2 = NDDataArithmetic(data2, meta=meta2, mask=mask2, wcs=wcs2,
+    nd2 = NDDataArithmetic(data2, meta=meta2, mask=mask2,
                            uncertainty=uncertainty2)
 
     nd3 = nd1.add(nd2, handle_mask=mask_sad_func)

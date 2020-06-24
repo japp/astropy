@@ -1,5 +1,5 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-
+# pylint: disable=invalid-name
 import os
 import sys
 import subprocess
@@ -17,7 +17,7 @@ import astropy.units as u
 from astropy.tests.helper import assert_quantity_allclose
 
 try:
-    import scipy  # pylint: disable=W0611
+    import scipy  # pylint: disable=W0611 # noqa
 except ImportError:
     HAS_SCIPY = False
 else:
@@ -41,14 +41,14 @@ def test_Model_instance_repr_and_str():
     m = NonFittableModel(42.5)
     assert repr(m) == "<NonFittableModel(a=42.5)>"
     assert (str(m) ==
-        "Model: NonFittableModel\n"
-        "Inputs: ()\n"
-        "Outputs: ()\n"
-        "Model set size: 1\n"
-        "Parameters:\n"
-        "     a  \n"
-        "    ----\n"
-        "    42.5")
+            "Model: NonFittableModel\n"
+            "Inputs: ()\n"
+            "Outputs: ()\n"
+            "Model set size: 1\n"
+            "Parameters:\n"
+            "     a  \n"
+            "    ----\n"
+            "    42.5")
 
     assert len(m) == 1
 
@@ -65,8 +65,8 @@ def test_inputless_model():
     """
 
     class TestModel(Model):
-        inputs = ()
-        outputs = ('y',)
+
+        n_outputs = 1
         a = Parameter()
 
         @staticmethod
@@ -113,9 +113,9 @@ def test_custom_model_signature():
     sig = signature(model_a.__init__)
     assert list(sig.parameters.keys()) == ['self', 'args', 'meta', 'name', 'kwargs']
     sig = signature(model_a.__call__)
-    assert list(sig.parameters.keys()) == ['self', 'x', 'model_set_axis',
+    assert list(sig.parameters.keys()) == ['self', 'inputs', 'model_set_axis',
                                            'with_bounding_box', 'fill_value',
-                                           'equivalencies', 'inputs_map']
+                                           'equivalencies', 'inputs_map', 'new_inputs']
 
     @custom_model
     def model_b(x, a=1, b=2):
@@ -127,9 +127,9 @@ def test_custom_model_signature():
     assert list(sig.parameters.keys()) == ['self', 'a', 'b', 'kwargs']
     assert [x.default for x in sig.parameters.values()] == [sig.empty, 1, 2, sig.empty]
     sig = signature(model_b.__call__)
-    assert list(sig.parameters.keys()) == ['self', 'x', 'model_set_axis',
+    assert list(sig.parameters.keys()) == ['self', 'inputs', 'model_set_axis',
                                            'with_bounding_box', 'fill_value',
-                                           'equivalencies', 'inputs_map']
+                                           'equivalencies', 'inputs_map', 'new_inputs']
 
     @custom_model
     def model_c(x, y, a=1, b=2):
@@ -141,9 +141,9 @@ def test_custom_model_signature():
     assert list(sig.parameters.keys()) == ['self', 'a', 'b', 'kwargs']
     assert [x.default for x in sig.parameters.values()] == [sig.empty, 1, 2, sig.empty]
     sig = signature(model_c.__call__)
-    assert list(sig.parameters.keys()) == ['self', 'x', 'y', 'model_set_axis',
+    assert list(sig.parameters.keys()) == ['self', 'inputs', 'model_set_axis',
                                            'with_bounding_box', 'fill_value',
-                                           'equivalencies', 'inputs_map']
+                                           'equivalencies', 'inputs_map', 'new_inputs']
 
 
 def test_custom_model_subclass():
@@ -167,9 +167,9 @@ def test_custom_model_subclass():
     sig = signature(model_b.__init__)
     assert list(sig.parameters.keys()) == ['self', 'a', 'kwargs']
     sig = signature(model_b.__call__)
-    assert list(sig.parameters.keys()) == ['self', 'x', 'model_set_axis',
+    assert list(sig.parameters.keys()) == ['self', 'inputs', 'model_set_axis',
                                            'with_bounding_box', 'fill_value',
-                                           'equivalencies', 'inputs_map']
+                                           'equivalencies', 'inputs_map', 'new_inputs']
 
 
 def test_custom_model_parametrized_decorator():
@@ -215,7 +215,7 @@ def test_custom_inverse_reset():
     """Test resetting a custom inverse to the model's default inverse."""
 
     class TestModel(Model):
-        inputs = ()
+        n_inputs = 0
         outputs = ('y',)
 
         @property
@@ -312,6 +312,7 @@ def test_render_model_1d():
                     assert ((flux - np.sum(boxed)) / flux) < 1e-7
 
 
+@pytest.mark.filterwarnings('ignore:invalid value encountered in less')
 def test_render_model_3d():
     imshape = (17, 21, 27)
     image = np.zeros(imshape)
@@ -387,7 +388,7 @@ def test_n_submodels_in_single_models():
 
 
 def test_compound_deepcopy():
-    model = (models.Gaussian1D(10, 2,3) | models.Shift(2)) & models.Rotation2D(21.3)
+    model = (models.Gaussian1D(10, 2, 3) | models.Shift(2)) & models.Rotation2D(21.3)
     new_model = model.deepcopy()
     assert id(model) != id(new_model)
     assert id(model._leaflist) != id(new_model._leaflist)
@@ -419,13 +420,13 @@ print(repr(Gaussian1D.rename('CustomGaussian')))
 MODEL_RENAME_EXPECTED = b"""
 <class 'astropy.modeling.functional_models.Gaussian1D'>
 Name: Gaussian1D
-Inputs: ('x',)
-Outputs: ('y',)
+N_inputs: 1
+N_outputs: 1
 Fittable parameters: ('amplitude', 'mean', 'stddev')
 <class '__main__.CustomGaussian'>
 Name: CustomGaussian (Gaussian1D)
-Inputs: ('x',)
-Outputs: ('y',)
+N_inputs: 1
+N_outputs: 1
 Fittable parameters: ('amplitude', 'mean', 'stddev')
 """.strip()
 
@@ -450,3 +451,77 @@ def test_rename_path(tmpdir):
 
     output = subprocess.check_output([sys.executable, script], env=env)
     assert output.splitlines() == MODEL_RENAME_EXPECTED.splitlines()
+
+
+@pytest.mark.parametrize('model_class',
+                         [models.Gaussian1D, models.Polynomial1D,
+                          models.Shift, models.Tabular1D])
+def test_rename_1d(model_class):
+    new_model = model_class.rename(name='Test1D')
+    assert new_model.name == 'Test1D'
+
+
+@pytest.mark.parametrize('model_class',
+                         [models.Gaussian2D, models.Polynomial2D, models.Tabular2D])
+def test_rename_2d(model_class):
+    new_model = model_class.rename(name='Test2D')
+    assert new_model.name == 'Test2D'
+
+
+def test_rename_inputs_outputs():
+    g2 = models.Gaussian2D(10, 2, 3, 1, 2)
+    assert g2.inputs == ("x", "y")
+    assert g2.outputs == ("z",)
+
+    with pytest.raises(ValueError):
+        g2.inputs = ("w", )
+
+    with pytest.raises(ValueError):
+        g2.outputs = ("w", "e")
+
+
+def test_coerce_units():
+    model = models.Polynomial1D(1, c0=1, c1=2)
+
+    with pytest.raises(u.UnitsError):
+        model(u.Quantity(10, u.m))
+
+    with_input_units = model.coerce_units({"x": u.m})
+    result = with_input_units(u.Quantity(10, u.m))
+    assert np.isclose(result, 21.0)
+
+    with_input_units_tuple = model.coerce_units((u.m,))
+    result = with_input_units_tuple(u.Quantity(10, u.m))
+    assert np.isclose(result, 21.0)
+
+    with_return_units = model.coerce_units(return_units={"y": u.s})
+    result = with_return_units(10)
+    assert np.isclose(result.value, 21.0)
+    assert result.unit == u.s
+
+    with_return_units_tuple = model.coerce_units(return_units=(u.s,))
+    result = with_return_units_tuple(10)
+    assert np.isclose(result.value, 21.0)
+    assert result.unit == u.s
+
+    with_both = model.coerce_units({"x": u.m}, {"y": u.s})
+
+    result = with_both(u.Quantity(10, u.m))
+    assert np.isclose(result.value, 21.0)
+    assert result.unit == u.s
+
+    with pytest.raises(ValueError, match=r"input_units keys.*do not match model inputs"):
+        model.coerce_units({"q": u.m})
+
+    with pytest.raises(ValueError, match=r"input_units length does not match n_inputs"):
+        model.coerce_units((u.m, u.s))
+
+    model_with_existing_input_units = models.BlackBody()
+    with pytest.raises(ValueError, match=r"Cannot specify input_units for model with existing input units"):
+        model_with_existing_input_units.coerce_units({"x": u.m})
+
+    with pytest.raises(ValueError, match=r"return_units keys.*do not match model outputs"):
+        model.coerce_units(return_units={"q": u.m})
+
+    with pytest.raises(ValueError, match=r"return_units length does not match n_outputs"):
+        model.coerce_units(return_units=(u.m, u.s))

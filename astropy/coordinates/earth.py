@@ -13,10 +13,10 @@ from astropy import units as u
 from astropy import constants as consts
 from astropy.units.quantity import QuantityInfoBase
 from astropy.utils.exceptions import AstropyUserWarning
-from .angles import Longitude, Latitude
+from .angles import Angle, Longitude, Latitude
 from .representation import CartesianRepresentation, CartesianDifferential
 from .errors import UnknownSiteException
-from astropy.utils import data, deprecated
+from astropy.utils import data
 from astropy import _erfa as erfa
 
 __all__ = ['EarthLocation']
@@ -74,7 +74,7 @@ def _get_json_result(url, err_str, use_google):
             raise NameResolveError(err_str.format(msg="unknown failure with "
                                                   "Google API"))
 
-    else: # OpenStreetMap returns a list
+    else:  # OpenStreetMap returns a list
         results = resp_data
 
     if not results:
@@ -204,7 +204,7 @@ class EarthLocation(u.Quantity):
 
         Parameters
         ----------
-        x, y, z : `~astropy.units.Quantity` or array-like
+        x, y, z : `~astropy.units.Quantity` or array_like
             Cartesian coordinates.  If not quantities, ``unit`` should be given.
         unit : `~astropy.units.UnitBase` object or None
             Physical unit of the coordinate values.  If ``x``, ``y``, and/or
@@ -280,7 +280,10 @@ class EarthLocation(u.Quantity):
         ``gd2gc`` is used.  See https://github.com/liberfa/erfa
         """
         ellipsoid = _check_ellipsoid(ellipsoid, default=cls._ellipsoid)
-        lon = Longitude(lon, u.degree, wrap_angle=180*u.degree, copy=False)
+        # We use Angle here since there is no need to wrap the longitude -
+        # gd2gc will just take cos/sin anyway.  And wrapping might fail
+        # on readonly input.
+        lon = Angle(lon, u.degree, copy=False)
         lat = Latitude(lat, u.degree, copy=False)
         # don't convert to m by default, so we can use the height unit below.
         if not isinstance(height, u.Quantity):
@@ -344,12 +347,13 @@ class EarthLocation(u.Quantity):
         See Also
         --------
         get_site_names : the list of sites that this function can access
-        """
+        """  # noqa
         registry = cls._get_site_registry()
         try:
             el = registry[site_name]
         except UnknownSiteException as e:
-            raise UnknownSiteException(e.site, 'EarthLocation.get_site_names', close_names=e.close_names)
+            raise UnknownSiteException(e.site, 'EarthLocation.get_site_names',
+                                       close_names=e.close_names)
 
         if cls is el.__class__:
             return el
@@ -385,12 +389,12 @@ class EarthLocation(u.Quantity):
             The address to get the location for. As per the Google maps API,
             this can be a fully specified street address (e.g., 123 Main St.,
             New York, NY) or a city name (e.g., Danbury, CT), or etc.
-        get_height : bool (optional)
+        get_height : bool, optional
             This only works when using the Google API! See the ``google_api_key``
             block below. Use the retrieved location to perform a second query to
             the Google maps elevation API to retrieve the height of the input
             address [3]_.
-        google_api_key : str (optional)
+        google_api_key : str, optional
             A Google API key with the Geocoding API and (optionally) the
             elevation API enabled. See [4]_ for more information.
 
@@ -404,7 +408,7 @@ class EarthLocation(u.Quantity):
         ----------
         .. [1] https://nominatim.openstreetmap.org/
         .. [2] https://developers.google.com/maps/documentation/geocoding/start
-        .. [3] https://developers.google.com/maps/documentation/elevation/
+        .. [3] https://developers.google.com/maps/documentation/elevation/start
         .. [4] https://developers.google.com/maps/documentation/geocoding/get-api-key
 
         """
@@ -413,19 +417,20 @@ class EarthLocation(u.Quantity):
 
         # Fail fast if invalid options are passed:
         if not use_google and get_height:
-            raise ValueError('Currently, `get_height` only works when using '
-                             'the Google geocoding API, which requires passing '
-                             'a Google API key with `google_api_key`. See: '
-                             'https://developers.google.com/maps/documentation/geocoding/get-api-key '
-                             'for information on obtaining an API key.')
+            raise ValueError(
+                'Currently, `get_height` only works when using '
+                'the Google geocoding API, which requires passing '
+                'a Google API key with `google_api_key`. See: '
+                'https://developers.google.com/maps/documentation/geocoding/get-api-key '
+                'for information on obtaining an API key.')
 
-        if use_google: # Google
+        if use_google:  # Google
             pars = urllib.parse.urlencode({'address': address,
                                            'key': google_api_key})
             geo_url = ("https://maps.googleapis.com/maps/api/geocode/json?{}"
                        .format(pars))
 
-        else: # OpenStreetMap
+        else:  # OpenStreetMap
             pars = urllib.parse.urlencode({'q': address,
                                            'format': 'json'})
             geo_url = ("https://nominatim.openstreetmap.org/search?{}"
@@ -444,7 +449,7 @@ class EarthLocation(u.Quantity):
 
         else:
             loc = geo_result[0]
-            lat = float(loc['lat']) # strings are returned by OpenStreetMap
+            lat = float(loc['lat'])  # strings are returned by OpenStreetMap
             lon = float(loc['lon'])
 
         if get_height:
@@ -514,6 +519,9 @@ class EarthLocation(u.Quantity):
         -------
         reg : astropy.coordinates.sites.SiteRegistry
         """
+        # need to do this here at the bottom to avoid circular dependencies
+        from .sites import get_builtin_sites, get_downloaded_sites
+
         if force_builtin and force_download:
             raise ValueError('Cannot have both force_builtin and force_download True')
 
@@ -589,21 +597,9 @@ class EarthLocation(u.Quantity):
             u.Quantity(height * u.meter, self.unit, copy=False))
 
     @property
-    @deprecated('2.0', alternative='`lon`', obj_type='property')
-    def longitude(self):
-        """Longitude of the location, for the default ellipsoid."""
-        return self.geodetic[0]
-
-    @property
     def lon(self):
         """Longitude of the location, for the default ellipsoid."""
         return self.geodetic[0]
-
-    @property
-    @deprecated('2.0', alternative='`lat`', obj_type='property')
-    def latitude(self):
-        """Latitude of the location, for the default ellipsoid."""
-        return self.geodetic[1]
 
     @property
     def lat(self):
@@ -643,7 +639,7 @@ class EarthLocation(u.Quantity):
         """
         # Broadcast for a single position at multiple times, but don't attempt
         # to be more general here.
-        if obstime and self.size == 1 and obstime.size > 1:
+        if obstime and self.size == 1 and obstime.shape:
             self = np.broadcast_to(self, obstime.shape, subok=True)
 
         # do this here to prevent a series of complicated circular imports
@@ -750,7 +746,7 @@ class EarthLocation(u.Quantity):
         for body in bodies:
             try:
                 GMs.append(_masses[body].to(u.m**3/u.s**2, [M_GM_equivalency]))
-            except KeyError as exc:
+            except KeyError:
                 raise KeyError(f'body "{body}" does not have a mass!')
             except u.UnitsError as exc:
                 exc.args += ('"masses" argument values must be masses or '
@@ -812,7 +808,3 @@ class EarthLocation(u.Quantity):
             equivalencies = self._equivalencies
         new_array = self.unit.to(unit, array_view, equivalencies=equivalencies)
         return new_array.view(self.dtype).reshape(self.shape)
-
-
-# need to do this here at the bottom to avoid circular dependencies
-from .sites import get_builtin_sites, get_downloaded_sites

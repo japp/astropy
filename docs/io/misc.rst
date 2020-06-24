@@ -3,7 +3,7 @@ Miscellaneous: HDF5, YAML, ASDF, pickle (`astropy.io.misc`)
 ***********************************************************
 
 The `astropy.io.misc` module contains miscellaneous input/output routines that
-do not fit elsewhere, and are often used by other Astropy sub-packages. For
+do not fit elsewhere, and are often used by other ``astropy`` sub-packages. For
 example, `astropy.io.misc.hdf5` contains functions to read/write
 :class:`~astropy.table.Table` objects from/to HDF5 files, but these
 should not be imported directly by users. Instead, users can access this
@@ -23,9 +23,9 @@ listed in the `astropy.io.misc` section.
 astropy.io.misc.asdf Package
 ============================
 
-The **asdf** subpackage contains code that is used to serialize astropy types
-so that they can be represented and stored using the Advanced Scientific Data
-Format (ASDF).
+The **asdf** sub-package contains code that is used to serialize ``astropy``
+types so that they can be represented and stored using the Advanced Scientific
+Data Format (ASDF).
 
 If both **asdf** and **astropy** are installed, no further configuration is
 required in order to process ASDF files that contain **astropy** types. The
@@ -46,13 +46,13 @@ Using ASDF With Table I/O
 -------------------------
 
 ASDF provides readers and writers for `~astropy.table.Table` using the
-:ref:`table_io`. This makes it easy to read and write ASDF files with
+:ref:`table_io`. This makes it convenient to read and write ASDF files with
 `~astropy.table.Table` data.
 
 Basic Usage
 ^^^^^^^^^^^
 
-Given a table, it is straightforward to write it out to an ASDF file::
+Given a table, it is possible to write it out to an ASDF file::
 
     from astropy.table import Table
 
@@ -64,7 +64,7 @@ Given a table, it is straightforward to write it out to an ASDF file::
 The I/O registry automatically selects the appropriate writer function to use
 based on the ``.asdf`` extension of the output file.
 
-Reading a file generated in this way is equally simple using
+Reading a file generated in this way is also possible using
 `~astropy.table.Table.read`::
 
     t2 = Table.read('table.asdf')
@@ -80,7 +80,7 @@ it is possible to explicitly specify the reader/writer function to be used::
 Advanced Usage
 ^^^^^^^^^^^^^^
 
-The fundamental ASDF data structure is the tree, which is simply a nested
+The fundamental ASDF data structure is the tree, which is a nested
 combination of basic data structures (see `this
 <https://asdf.readthedocs.io/en/latest/asdf/features.html#data-model>`_
 for a more detailed description). At the top level, the tree is a `dict`.
@@ -140,32 +140,126 @@ locate the table within the ASDF tree. The option in this case is
 Details
 -------
 
-The **asdf** subpackage defines classes, referred to as **tags**, that
-implement the logic for serialization and deserialization of Astropy types.
-Users should never need to refer to tag implementations directly.  Their
+The **asdf** sub-package defines classes, referred to as **tags**, that
+implement the logic for serialization and deserialization of ``astropy`` types.
+Users should never need to refer to tag implementations directly. Their
 presence should be entirely transparent when processing ASDF files.
 
 ASDF makes use of abstract data type definitions called **schemas**. The tag
 classes provided here are specific implementations of particular schemas. Some
-of the tags in Astropy (e.g., those related to transforms) implement schemas
+of the tags in ``astropy`` (e.g., those related to transforms) implement schemas
 that are defined by the ASDF Standard. In other cases, both the tags and
-schemas are defined within Astropy (e.g., those related to many of the
-coordinate frames). Documentation of the individual schemas defined by Astropy
-can be found below in the :ref:`asdf_schemas` section.
+schemas are defined within ``astropy`` (e.g., those related to many of the
+coordinate frames). Documentation of the individual schemas defined by
+``astropy`` can be found below in the :ref:`asdf_schemas` section.
 
-Not all Astropy types are currently serializable by ASDF. Attempting to write
-unsupported types to an ASDF file will lead to a ``RepresenterError``. In order
-to support new types, new tags and schemas must be created. See `Writing ASDF
-Extensions <https://asdf.readthedocs.io/en/latest/asdf/extensions.html>`_ for
-additional details.
+Not all ``astropy`` types are currently serializable by ASDF. Attempting to
+write unsupported types to an ASDF file will lead to a ``RepresenterError``. In
+order to support new types, new tags and schemas must be created. See `Writing
+ASDF Extensions <https://asdf.readthedocs.io/en/latest/asdf/extensions.html>`_
+for additional details, as well as the following example.
+
+Example: Adding a New Object to the Astropy ASDF Extension
+----------------------------------------------------------
+
+In this example, we will show how to implement serialization for a new
+`~astropy.modeling.Model` object, but the basic principles apply to
+serialization of other ``astropy`` objects. As mentioned, adding a new object
+to the ``astropy``  ASDF extension requires both a tag and a schema.
+
+All schemas for transforms are currently defined within the ASDF standard.
+Any new serializable transforms must have a corresponding new
+schema here. Let's consider a new model called ``MyModel``, a new model in
+``astropy.modeling.functional_models`` that has two parameters ``amplitude``
+and ``x_0``. We would like to strictly require both of these parameters be set.
+We would also like to specify that these parameters can either be numeric type,
+or ``astropy.units.quantity`` type. A schema describing this
+model would look like::
+
+    %YAML 1.1
+    ---
+    $schema: "http://stsci.edu/schemas/yaml-schema/draft-01"
+    id: "http://stsci.edu/schemas/asdf/transform/mymodel-1.0.0"
+    tag: "tag:stsci.edu:asdf/transform/mymodel-1.0.0"
+    title: >
+      Example new model.
+
+    description: >
+      Example new model, which describes the distribution of ABC. 
+
+    allOf:
+      - $ref: "transform-1.2.0"
+      - type: object
+        properties:
+          amplitude:
+            anyOf:
+              - $ref: "../unit/quantity-1.1.0"
+              - type: number
+            description: Amplitude of distribution.
+          x_0:
+            anyOf:
+              - $ref: "../unit/quantity-1.1.0"
+              - type: number
+            description: X center position.
+
+        required: ['amplitude', 'x_0]
+    ...
+
+All new transform schemas reference the base transform schema of the latest
+type. This schema describes the other model attributes that are common to all
+or many models, so that individual schemas only handle the parameters specific
+to that model. Additionally, this schema references the latest verison
+of the ``quantity`` schema, so that models can retain information about units
+and quantities. References allow previously defined objects to be used inside
+new custom types.
+
+The next component is the tag class. This class must have a ``to_tree`` method
+in which the required attributes of the object in question are obtained, and a
+``from_tree`` method which reconstructs the object based on the parameters
+written to the ASDF file. ``astropy`` Models inherit from the
+``TransformType`` base class tag, which takes care of attributes (e.g ``name``,
+``bounding_box``, ``n_inputs``) that are common to all or many Model classes to
+limit redundancy in individual tags. Each individual model tag then only has
+to obtain and set model-specific parameters::
+
+    from .basic import TransformType
+    from . import _parameter_to_value
+
+    class MyModelType(TransformType):
+    name = 'transform/mymodel'
+    version = '1.0.0'
+    types = ['astropy.modeling.functional_models.MyModel']
+
+    @classmethod
+    def from_tree_transform(cls, node, ctx):
+        return functional_models.MyModel(amplitude=node['amplitude'],
+                                         x_0=node['x_0'])
+
+    @classmethod
+    def to_tree_transform(cls, model, ctx):
+        node = {'amplitude': _parameter_to_value(amplitude),
+                'x_0': _parameter_to_value(x_0)}
+        return node
+
+This tag class contains all the machinery to deconstruct objects to and
+reconstruct them from ASDF files. The tag class - by convention named by the
+object name appended with 'Type' - references the schema and version, and the
+object in ``astropy.modeling.functional_models``. The basic model parameters
+are handled in the ``to_tree_transform`` and ``from_tree_transform`` of the
+base ``TransformType`` class, while model-specific parameters are handled here
+in ``MyModelType``. Since this model can take units and quantities with input
+parameters, the imported``_parameter_to_value`` allows this to flexibly work
+with both basic numeric values as well as quantities.
+
 
 Schemas
 -------
 
-Documentation for each of the individual ASDF schemas defined by Astropy can be
-found below.
+Documentation for each of the individual ASDF schemas defined by ``astropy``
+can be found below.
 
 .. toctree::
    :maxdepth: 2
 
    asdf-schemas
+

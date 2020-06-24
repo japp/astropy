@@ -20,7 +20,7 @@ from .core import (Unit, dimensionless_unscaled, get_current_unit_registry,
                    UnitBase, UnitsError, UnitConversionError, UnitTypeError)
 from .utils import is_effectively_unity
 from .format.latex import Latex
-from astropy.utils.compat import NUMPY_LT_1_14, NUMPY_LT_1_16, NUMPY_LT_1_17
+from astropy.utils.compat import NUMPY_LT_1_17
 from astropy.utils.compat.misc import override__dir__
 from astropy.utils.exceptions import AstropyDeprecationWarning, AstropyWarning
 from astropy.utils.misc import isiterable
@@ -196,6 +196,20 @@ class QuantityInfo(QuantityInfoBase):
 
         return out
 
+    def get_sortable_arrays(self):
+        """
+        Return a list of arrays which can be lexically sorted to represent
+        the order of the parent column.
+
+        For Quantity this is just the quantity itself.
+
+
+        Returns
+        -------
+        arrays : list of ndarray
+        """
+        return [self._parent]
+
 
 class Quantity(np.ndarray):
     """A `~astropy.units.Quantity` represents a number with some associated unit.
@@ -279,11 +293,6 @@ class Quantity(np.ndarray):
         if unit is not None:
             # convert unit first, to avoid multiple string->unit conversions
             unit = Unit(unit)
-            # if we allow subclasses, allow a class from the unit.
-            if subok:
-                qcls = getattr(unit, '_quantity_class', cls)
-                if issubclass(qcls, cls):
-                    cls = qcls
 
         # optimize speed for Quantity with no dtype given, copy=False
         if isinstance(value, Quantity):
@@ -296,12 +305,8 @@ class Quantity(np.ndarray):
                                                isinstance(value, cls)):
                 value = value.view(cls)
 
-            if dtype is None:
-                if not copy:
-                    return value
-
-                if value.dtype.kind in 'iu':
-                    dtype = float
+            if dtype is None and value.dtype.kind in 'iu':
+                dtype = float
 
             return np.array(value, dtype=dtype, copy=copy, order=order,
                             subok=True, ndmin=ndmin)
@@ -374,14 +379,19 @@ class Quantity(np.ndarray):
         # check that array contains numbers or long int objects
         if (value.dtype.kind in 'OSU' and
             not (value.dtype.kind == 'O' and
-                 isinstance(value.item(() if value.ndim == 0 else 0),
-                            numbers.Number))):
+                 isinstance(value.item(0), numbers.Number))):
             raise TypeError("The value must be a valid Python or "
                             "Numpy numeric type.")
 
         # by default, cast any integer, boolean, etc., to float
         if dtype is None and value.dtype.kind in 'iuO':
             value = value.astype(float)
+
+        # if we allow subclasses, allow a class from the unit.
+        if subok:
+            qcls = getattr(unit, '_quantity_class', cls)
+            if issubclass(qcls, cls):
+                cls = qcls
 
         value = value.view(cls)
         value._set_unit(value_unit)
@@ -418,7 +428,7 @@ class Quantity(np.ndarray):
 
         raise NotImplementedError('__array_wrap__ should not be used '
                                   'with a context any more, since we require '
-                                  'numpy >=1.13.  Please raise an issue on '
+                                  'numpy >=1.16.  Please raise an issue on '
                                   'https://github.com/astropy/astropy')
 
     def __array_ufunc__(self, function, method, *inputs, **kwargs):
@@ -996,30 +1006,6 @@ class Quantity(np.ndarray):
 
         return super().__pow__(other)
 
-    # For Py>=3.5
-    if NUMPY_LT_1_16:
-        def __matmul__(self, other):
-            result_unit = self.unit * getattr(other, 'unit',
-                                              dimensionless_unscaled)
-            result_array = np.matmul(self.value,
-                                     getattr(other, 'value', other))
-            return self._new_view(result_array, result_unit)
-
-        def __rmatmul__(self, other):
-            result_unit = self.unit * getattr(other, 'unit',
-                                              dimensionless_unscaled)
-            result_array = np.matmul(getattr(other, 'value', other),
-                                     self.value)
-            return self._new_view(result_array, result_unit)
-
-    # In numpy 1.13, 1.14, a np.positive ufunc exists, but ndarray.__pos__
-    # does not go through it, so we define it, to allow subclasses to override
-    # it inside __array_ufunc__. This can be removed if a solution to
-    # https://github.com/numpy/numpy/issues/9081 is merged.
-    def __pos__(self):
-        """Plus the quantity."""
-        return np.positive(self)
-
     # other overrides of special functions
     def __hash__(self):
         return hash(self.value) ^ hash(self.unit)
@@ -1051,7 +1037,7 @@ class Quantity(np.ndarray):
                 raise
         # For single elements, ndarray.__getitem__ returns scalars; these
         # need a new view as a Quantity.
-        if type(out) is not type(self):
+        if not isinstance(out, np.ndarray):
             out = self._new_view(out)
         return out
 
@@ -1205,17 +1191,9 @@ class Quantity(np.ndarray):
                                     formatter=formatter)
 
             # the view is needed for the scalar case - value might be float
-            if NUMPY_LT_1_14:   # style deprecated in 1.14
-                latex_value = np.array2string(
-                    self.view(np.ndarray),
-                    style=(float_formatter if self.dtype.kind == 'f'
-                           else complex_formatter if self.dtype.kind == 'c'
-                           else repr),
-                    max_line_width=np.inf, separator=',~')
-            else:
-                latex_value = np.array2string(
-                    self.view(np.ndarray),
-                    max_line_width=np.inf, separator=',~')
+            latex_value = np.array2string(
+                self.view(np.ndarray),
+                max_line_width=np.inf, separator=',~')
 
             latex_value = latex_value.replace('...', r'\dots')
         finally:
@@ -1238,8 +1216,7 @@ class Quantity(np.ndarray):
 
     def __repr__(self):
         prefixstr = '<' + self.__class__.__name__ + ' '
-        sep = ',' if NUMPY_LT_1_14 else ', '
-        arrstr = np.array2string(self.view(np.ndarray), separator=sep,
+        arrstr = np.array2string(self.view(np.ndarray), separator=', ',
                                  prefix=prefixstr)
         return f'{prefixstr}{arrstr}{self._unitstr:s}>'
 
@@ -1344,7 +1321,7 @@ class Quantity(np.ndarray):
 
     def tolist(self):
         raise NotImplementedError("cannot make a list of Quantities.  Get "
-                                  "list of values with q.value.list()")
+                                  "list of values with q.value.tolist()")
 
     def _to_own_unit(self, value, check_precision=True):
         try:
@@ -1353,9 +1330,19 @@ class Quantity(np.ndarray):
             # We're not a Quantity, so let's try a more general conversion.
             # Plain arrays will be converted to dimensionless in the process,
             # but anything with a unit attribute will use that.
-            as_quantity = Quantity(value)
             try:
+                as_quantity = Quantity(value)
                 _value = as_quantity.to_value(self.unit)
+            except TypeError:
+                # Could not make a Quantity.  Maybe masked printing?
+                # Note: masked quantities do not work very well, but no reason
+                # to break even repr and str.
+                if (value is np.ma.masked_print_option and
+                        self.dtype.kind == 'O'):
+                    return value
+                else:
+                    raise
+
             except UnitsError:
                 # last chance: if this was not something with a unit
                 # and is all 0, inf, or nan, we treat it as arbitrary unit.
@@ -1387,6 +1374,10 @@ class Quantity(np.ndarray):
     def tostring(self, order='C'):
         raise NotImplementedError("cannot write Quantities to string.  Write "
                                   "array with q.value.tostring(...).")
+
+    def tobytes(self, order='C'):
+        raise NotImplementedError("cannot write Quantities to string.  Write "
+                                  "array with q.value.tobytes(...).")
 
     def tofile(self, fid, sep="", format="%s"):
         raise NotImplementedError("cannot write Quantities to file.  Write "
@@ -1486,7 +1477,7 @@ class Quantity(np.ndarray):
         ~astropy.units.UnitsError
             If operands have incompatible units.
         """
-        # A function should be in one of the following sets of dicts:
+        # A function should be in one of the following sets or dicts:
         # 1. SUBCLASS_SAFE_FUNCTIONS (set), if the numpy implementation
         #    supports Quantity; we pass on to ndarray.__array_function__.
         # 2. FUNCTION_HELPERS (dict), if the numpy implementation is usable
@@ -1634,12 +1625,12 @@ class Quantity(np.ndarray):
     # Calculation: override methods that do not make sense.
 
     def all(self, axis=None, out=None):
-        raise NotImplementedError("cannot evaluate truth value of quantities. "
-                                  "Evaluate array with q.value.all(...)")
+        raise TypeError("cannot evaluate truth value of quantities. "
+                        "Evaluate array with q.value.all(...)")
 
     def any(self, axis=None, out=None):
-        raise NotImplementedError("cannot evaluate truth value of quantities. "
-                                  "Evaluate array with q.value.any(...)")
+        raise TypeError("cannot evaluate truth value of quantities. "
+                        "Evaluate array with q.value.any(...)")
 
     # Calculation: numpy functions that can be overridden with methods.
 
@@ -1665,7 +1656,7 @@ class Quantity(np.ndarray):
         obj : int, slice or sequence of ints
             Object that defines the index or indices before which ``values`` is
             inserted.
-        values : array-like
+        values : array_like
             Values to insert.  If the type of ``values`` is different
             from that of quantity, ``values`` is converted to the matching type.
             ``values`` should be shaped so that it can be broadcast appropriately
@@ -1745,30 +1736,85 @@ class SpecificTypeQuantity(Quantity):
         super()._set_unit(unit)
 
 
-def isclose(a, b, rtol=1.e-5, atol=None, **kwargs):
+def isclose(a, b, rtol=1.e-5, atol=None, equal_nan=False, **kwargs):
     """
+    Return a boolean array where two arrays are element-wise equal
+    within a tolerance.
+
+    Parameters
+    ----------
+    a, b : array_like or :class:`~astropy.units.Quantity`
+        Input values or arrays to compare
+    rtol : array_like or dimensionless :class:`~astropy.units.Quantity`
+        The relative tolerance for the comparison, which defaults to
+        ``1e-5``.  If ``rtol`` is a :class:`~astropy.units.Quantity`,
+        then it must be dimensionless.
+    atol : number or :class:`~astropy.units.Quantity`
+        The absolute tolerance for the comparison.  The units (or lack
+        thereof) of ``a``, ``b``, and ``atol`` must be consistent with
+        each other.  If `None`, ``atol`` defaults to zero in the
+        appropriate units.
+    equal_nan : `bool`
+        Whether to compare NaN’s as equal. If `True`, NaNs in ``a`` will
+        be considered equal to NaN’s in ``b``.
+
     Notes
     -----
-    Returns True if two arrays are element-wise equal within a tolerance.
-
     This is a :class:`~astropy.units.Quantity`-aware version of
     :func:`numpy.isclose`.
+
+    Raises
+    ------
+    UnitsError
+        If the dimensions of ``a``, ``b``, or ``atol`` are incompatible,
+        or if ``rtol`` is not dimensionless.
+
+    See also
+    --------
+    allclose
     """
-    return np.isclose(*_unquantify_allclose_arguments(a, b, rtol, atol),
-                      **kwargs)
+    unquantified_args = _unquantify_allclose_arguments(a, b, rtol, atol)
+    return np.isclose(*unquantified_args, equal_nan=equal_nan, **kwargs)
 
 
-def allclose(a, b, rtol=1.e-5, atol=None, **kwargs):
+def allclose(a, b, rtol=1.e-5, atol=None, equal_nan=False, **kwargs) -> bool:
     """
+    Whether two arrays are element-wise equal within a tolerance.
+
+    Parameters
+    ----------
+    a, b : array_like or :class:`~astropy.units.Quantity`
+        Input values or arrays to compare
+    rtol : array_like or dimensionless :class:`~astropy.units.Quantity`
+        The relative tolerance for the comparison, which defaults to
+        ``1e-5``.  If ``rtol`` is a :class:`~astropy.units.Quantity`,
+        then it must be dimensionless.
+    atol : number or :class:`~astropy.units.Quantity`
+        The absolute tolerance for the comparison.  The units (or lack
+        thereof) of ``a``, ``b``, and ``atol`` must be consistent with
+        each other.  If `None`, ``atol`` defaults to zero in the
+        appropriate units.
+    equal_nan : `bool`
+        Whether to compare NaN’s as equal. If `True`, NaNs in ``a`` will
+        be considered equal to NaN’s in ``b``.
+
     Notes
     -----
-    Returns True if two arrays are element-wise equal within a tolerance.
-
     This is a :class:`~astropy.units.Quantity`-aware version of
     :func:`numpy.allclose`.
+
+    Raises
+    ------
+    UnitsError
+        If the dimensions of ``a``, ``b``, or ``atol`` are incompatible,
+        or if ``rtol`` is not dimensionless.
+
+    See also
+    --------
+    isclose
     """
-    return np.allclose(*_unquantify_allclose_arguments(a, b, rtol, atol),
-                       **kwargs)
+    unquantified_args = _unquantify_allclose_arguments(a, b, rtol, atol)
+    return np.allclose(*unquantified_args, equal_nan=equal_nan, **kwargs)
 
 
 def _unquantify_allclose_arguments(actual, desired, rtol, atol):
@@ -1778,26 +1824,31 @@ def _unquantify_allclose_arguments(actual, desired, rtol, atol):
     try:
         desired = desired.to(actual.unit)
     except UnitsError:
-        raise UnitsError("Units for 'desired' ({}) and 'actual' ({}) "
-                         "are not convertible"
-                         .format(desired.unit, actual.unit))
+        raise UnitsError(
+            f"Units for 'desired' ({desired.unit}) and 'actual' "
+            f"({actual.unit}) are not convertible"
+        )
 
     if atol is None:
-        # by default, we assume an absolute tolerance of 0
+        # By default, we assume an absolute tolerance of zero in the
+        # appropriate units.  The default value of None for atol is
+        # needed because the units of atol must be consistent with the
+        # units for a and b.
         atol = Quantity(0)
     else:
         atol = Quantity(atol, subok=True, copy=False)
         try:
             atol = atol.to(actual.unit)
         except UnitsError:
-            raise UnitsError("Units for 'atol' ({}) and 'actual' ({}) "
-                             "are not convertible"
-                             .format(atol.unit, actual.unit))
+            raise UnitsError(
+                f"Units for 'atol' ({atol.unit}) and 'actual' "
+                f"({actual.unit}) are not convertible"
+            )
 
     rtol = Quantity(rtol, subok=True, copy=False)
     try:
         rtol = rtol.to(dimensionless_unscaled)
     except Exception:
-        raise UnitsError("`rtol` should be dimensionless")
+        raise UnitsError("'rtol' should be dimensionless")
 
     return actual.value, desired.value, rtol.value, atol.value

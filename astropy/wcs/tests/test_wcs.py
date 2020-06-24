@@ -2,8 +2,10 @@
 
 import io
 import os
+import sys
 import warnings
 from datetime import datetime
+from distutils.version import LooseVersion
 
 import pytest
 import numpy as np
@@ -13,19 +15,41 @@ from numpy.testing import (
 
 from astropy.tests.helper import raises, catch_warnings
 from astropy import wcs
-from astropy.wcs import _wcs
+from astropy.wcs import _wcs  # noqa
+from astropy.wcs.wcs import FITSFixedWarning
+from astropy.utils.compat.context import nullcontext
 from astropy.utils.data import (
     get_pkg_data_filenames, get_pkg_data_contents, get_pkg_data_filename)
 from astropy.utils.misc import NumpyRNGContext
-from astropy.utils.exceptions import AstropyUserWarning
+from astropy.utils.exceptions import (
+    AstropyUserWarning, AstropyWarning, AstropyDeprecationWarning)
 from astropy.io import fits
 from astropy.coordinates import SkyCoord
+
+
+_WCSLIB_VER = LooseVersion(_wcs.__version__)
+
+
+def _check_v71_dateref_warnings(w, nmax=None):
+    if _WCSLIB_VER >= '7.1' and _WCSLIB_VER < '7.3' and w:
+        if nmax is None:
+            assert w
+        else:
+            assert len(w) == nmax
+
+        for item in w:
+            if (str(item.message) == "'datfix' made the change "
+                "'Set DATE-REF to '1858-11-17' from MJD-REF'."):
+                break
+        else:
+            assert False, "No 'datfix' warning found"
 
 
 class TestMaps:
     def setup(self):
         # get the list of the hdr files that we want to test
-        self._file_list = list(get_pkg_data_filenames("data/maps", pattern="*.hdr"))
+        self._file_list = list(get_pkg_data_filenames(
+            "data/maps", pattern="*.hdr"))
 
     def test_consistency(self):
         # Check to see that we actually have the list we expect, so that we
@@ -93,7 +117,7 @@ def test_fixes():
         header = get_pkg_data_contents(
             'data/nonstandard_units.hdr', encoding='binary')
         try:
-            w = wcs.WCS(header, translate_units='dhs')
+            wcs.WCS(header, translate_units='dhs')
         except wcs.InvalidTransformError:
             pass
         else:
@@ -110,6 +134,8 @@ def test_fixes():
             assert 'm/s' in str(item.message)
 
 
+# Ignore "PV2_2 = 0.209028857410973 invalid keyvalue" warning seen on Windows.
+@pytest.mark.filterwarnings(r'ignore:PV2_2')
 def test_outside_sky():
     """
     From github issue #107
@@ -132,8 +158,8 @@ def test_pix2world():
     filename = get_pkg_data_filename('data/sip2.fits')
     with catch_warnings(wcs.wcs.FITSFixedWarning) as caught_warnings:
         # this raises a warning unimportant for this testing the pix2world
-        #   FITSFixedWarning(u'The WCS transformation has more axes (2) than the
-        #        image it is associated with (0)')
+        #   FITSFixedWarning(u'The WCS transformation has more axes (2) than
+        #        the image it is associated with (0)')
         ww = wcs.WCS(filename)
 
         # might as well monitor for changing behavior
@@ -162,7 +188,8 @@ def test_pix2world():
 
 def test_load_fits_path():
     fits_name = get_pkg_data_filename('data/sip.fits')
-    w = wcs.WCS(fits_name)
+    with pytest.warns(FITSFixedWarning):
+        wcs.WCS(fits_name)
 
 
 def test_dict_init():
@@ -171,7 +198,9 @@ def test_dict_init():
     """
 
     # Dictionary with no actual WCS, returns identity transform
-    w = wcs.WCS({})
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        w = wcs.WCS({})
+    _check_v71_dateref_warnings(wrng)
 
     xp, yp = w.wcs_world2pix(41., 2., 1)
 
@@ -179,16 +208,22 @@ def test_dict_init():
     assert_array_almost_equal_nulp(yp, 2., 10)
 
     # Valid WCS
-    w = wcs.WCS({'CTYPE1': 'GLON-CAR',
-                 'CTYPE2': 'GLAT-CAR',
-                 'CUNIT1': 'deg',
-                 'CUNIT2': 'deg',
-                 'CRPIX1': 1,
-                 'CRPIX2': 1,
-                 'CRVAL1': 40.,
-                 'CRVAL2': 0.,
-                 'CDELT1': -0.1,
-                 'CDELT2': 0.1})
+    hdr = {
+        'CTYPE1': 'GLON-CAR',
+        'CTYPE2': 'GLAT-CAR',
+        'CUNIT1': 'deg',
+        'CUNIT2': 'deg',
+        'CRPIX1': 1,
+        'CRPIX2': 1,
+        'CRVAL1': 40.,
+        'CRVAL2': 0.,
+        'CDELT1': -0.1,
+        'CDELT2': 0.1
+    }
+    if _WCSLIB_VER >= '7.1':
+        hdr['DATEREF'] = '1858-11-17'
+
+    w = wcs.WCS(hdr)
 
     xp, yp = w.wcs_world2pix(41., 2., 0)
 
@@ -283,12 +318,12 @@ def test_invalid_shape():
 
     xy = np.random.random((2, 3))
     with pytest.raises(ValueError) as exc:
-        xy2 = w.wcs_pix2world(xy, 1)
+        w.wcs_pix2world(xy, 1)
     assert exc.value.args[0] == 'When providing two arguments, the array must be of shape (N, 2)'
 
     xy = np.random.random((2, 1))
     with pytest.raises(ValueError) as exc:
-        xy2 = w.wcs_pix2world(xy, 1)
+        w.wcs_pix2world(xy, 1)
     assert exc.value.args[0] == 'When providing two arguments, the array must be of shape (N, 2)'
 
 
@@ -296,7 +331,7 @@ def test_warning_about_defunct_keywords():
     def run():
         header = get_pkg_data_contents(
             'data/defunct_keywords.hdr', encoding='binary')
-        w = wcs.WCS(header)
+        wcs.WCS(header)
 
     with catch_warnings(wcs.FITSFixedWarning) as w:
         run()
@@ -319,7 +354,7 @@ def test_warning_about_defunct_keywords_exception():
     def run():
         header = get_pkg_data_contents(
             'data/defunct_keywords.hdr', encoding='binary')
-        w = wcs.WCS(header)
+        wcs.WCS(header)
 
     with pytest.raises(wcs.FITSFixedWarning):
         warnings.simplefilter("error", wcs.FITSFixedWarning)
@@ -330,8 +365,32 @@ def test_warning_about_defunct_keywords_exception():
 
 
 def test_to_header_string():
-    header_string = """
-    WCSAXES =                    2 / Number of coordinate axes                      CRPIX1  =                  0.0 / Pixel coordinate of reference point            CRPIX2  =                  0.0 / Pixel coordinate of reference point            CDELT1  =                  1.0 / Coordinate increment at reference point        CDELT2  =                  1.0 / Coordinate increment at reference point        CRVAL1  =                  0.0 / Coordinate value at reference point            CRVAL2  =                  0.0 / Coordinate value at reference point            LATPOLE =                 90.0 / [deg] Native latitude of celestial pole        END"""
+    hdrstr = (
+        "WCSAXES =                    2 / Number of coordinate axes                      ",
+        "CRPIX1  =                  0.0 / Pixel coordinate of reference point            ",
+        "CRPIX2  =                  0.0 / Pixel coordinate of reference point            ",
+        "CDELT1  =                  1.0 / Coordinate increment at reference point        ",
+        "CDELT2  =                  1.0 / Coordinate increment at reference point        ",
+        "CRVAL1  =                  0.0 / Coordinate value at reference point            ",
+        "CRVAL2  =                  0.0 / Coordinate value at reference point            ",
+        "LATPOLE =                 90.0 / [deg] Native latitude of celestial pole        ",
+    )
+
+    if _WCSLIB_VER >= '7.3':
+        hdrstr += (
+            "MJDREF  =                  0.0 / [d] MJD of fiducial time                       ",
+        )
+
+    elif _WCSLIB_VER >= '7.1':
+        hdrstr += (
+            "DATEREF = '1858-11-17'         / ISO-8601 fiducial time                         ",
+            "MJDREFI =                  0.0 / [d] MJD of fiducial time, integer part         ",
+            "MJDREFF =                  0.0 / [d] MJD of fiducial time, fractional part      "
+        )
+
+    hdrstr += ("END", )
+
+    header_string = ''.join(hdrstr)
 
     w = wcs.WCS()
     h0 = fits.Header.fromstring(w.to_header_string().strip())
@@ -344,17 +403,26 @@ def test_to_header_string():
 
 
 def test_to_fits():
+    nrec = 11 if _WCSLIB_VER >= '7.1' else 8
+    if _WCSLIB_VER < '7.1':
+        nrec = 8
+    elif _WCSLIB_VER < '7.3':
+        nrec = 11
+    else:
+        nrec = 9
+
     w = wcs.WCS()
     header_string = w.to_header()
     wfits = w.to_fits()
     assert isinstance(wfits, fits.HDUList)
     assert isinstance(wfits[0], fits.PrimaryHDU)
-    assert header_string == wfits[0].header[-8:]
+    assert header_string == wfits[0].header[-nrec:]
 
 
 def test_to_header_warning():
     fits_name = get_pkg_data_filename('data/sip.fits')
-    x = wcs.WCS(fits_name)
+    with pytest.warns(FITSFixedWarning):
+        x = wcs.WCS(fits_name)
     with catch_warnings() as w:
         x.to_header()
     assert len(w) == 1
@@ -384,7 +452,8 @@ def test_find_all_wcs_crash():
     # We have to set fix=False here, because one of the fixing tasks is to
     # remove redundant SCAMP distortion parameters when SIP distortion
     # parameters are also present.
-    wcses = wcs.find_all_wcs(header, fix=False)
+    with pytest.warns(FITSFixedWarning):
+        wcs.find_all_wcs(header, fix=False)
 
 
 def test_validate():
@@ -392,7 +461,7 @@ def test_validate():
         results = wcs.validate(get_pkg_data_filename("data/validate.fits"))
         results_txt = repr(results)
         version = wcs._wcs.__version__
-        if version[0] == '6':
+        if version[0] in ['6', '7']:
             filename = 'data/validate.6.txt'
         elif version[0] == '5':
             if version >= '5.13':
@@ -409,7 +478,8 @@ def test_validate():
 
 def test_validate_with_2_wcses():
     # From Issue #2053
-    results = wcs.validate(get_pkg_data_filename("data/2wcses.hdr"))
+    with pytest.warns(AstropyUserWarning):
+        results = wcs.validate(get_pkg_data_filename("data/2wcses.hdr"))
 
     assert "WCS key 'A':" in str(results)
 
@@ -427,7 +497,7 @@ def test_crpix_maps_to_crval():
          [0, 2.44084308e-05, 2.81394789e-11, 5.17856895e-13, 0.0],
          [-2.41334657e-07, 1.29289255e-10, 2.35753629e-14, 0.0, 0.0],
          [-2.37162007e-10, 5.43714947e-13, 0.0, 0.0, 0.0],
-         [ -2.81029767e-13, 0.0, 0.0, 0.0, 0.0]]
+         [-2.81029767e-13, 0.0, 0.0, 0.0, 0.0]]
     )
     b = np.array(
         [[0, 0, 2.99270374e-05, -2.38136074e-10, 7.23205168e-13],
@@ -567,7 +637,8 @@ def test_scamp_sip_distortion_parameters():
     parameters.
     """
     header = get_pkg_data_contents('data/validate.fits', encoding='binary')
-    w = wcs.WCS(header)
+    with pytest.warns(FITSFixedWarning):
+        w = wcs.WCS(header)
     # Just check that this doesn't raise an exception.
     w.all_pix2world(0, 0, 0)
 
@@ -579,7 +650,7 @@ def test_fixes2():
     header = get_pkg_data_contents(
         'data/nonstandard_units.hdr', encoding='binary')
     with pytest.raises(wcs.InvalidTransformError):
-        w = wcs.WCS(header, fix=False)
+        wcs.WCS(header, fix=False)
 
 
 def test_unit_normalization():
@@ -633,6 +704,10 @@ def test_footprint_to_file(tmpdir):
         w.footprint_to_file(testfile)
 
 
+# Ignore FITSFixedWarning about keyrecords following the END keyrecord were
+# ignored, which comes from src/astropy_wcs.c . Only a blind catch like this
+# seems to work when pytest warnings are turned into exceptions.
+@pytest.mark.filterwarnings('ignore')
 def test_validate_faulty_wcs():
     """
     From github issue #2053
@@ -643,7 +718,7 @@ def test_validate_faulty_wcs():
     h['PV2_1'] = 1.0
     hdu = fits.PrimaryHDU([[0]], header=h)
     hdulist = fits.HDUList([hdu])
-    # Check that this doesn't raise a NameError exception:
+    # Check that this doesn't raise a NameError exception
     wcs.validate(hdulist)
 
 
@@ -654,8 +729,9 @@ def test_error_message():
     with pytest.raises(wcs.InvalidTransformError):
         # Both lines are in here, because 0.4 calls .set within WCS.__init__,
         # whereas 0.3 and earlier did not.
-        w = wcs.WCS(header, _do_set=False)
-        c = w.all_pix2world([[536.0, 894.0]], 0)
+        with pytest.warns(FITSFixedWarning):
+            w = wcs.WCS(header, _do_set=False)
+            w.all_pix2world([[536.0, 894.0]], 0)
 
 
 def test_out_of_bounds():
@@ -676,29 +752,31 @@ def test_out_of_bounds():
 
 def test_calc_footprint_1():
     fits = get_pkg_data_filename('data/sip.fits')
-    w = wcs.WCS(fits)
+    with pytest.warns(FITSFixedWarning):
+        w = wcs.WCS(fits)
 
-    axes = (1000, 1051)
-    ref = np.array([[202.39314493, 47.17753352],
-                    [202.71885939, 46.94630488],
-                    [202.94631893, 47.15855022],
-                    [202.72053428, 47.37893142]])
-    footprint = w.calc_footprint(axes=axes)
-    assert_allclose(footprint, ref)
+        axes = (1000, 1051)
+        ref = np.array([[202.39314493, 47.17753352],
+                        [202.71885939, 46.94630488],
+                        [202.94631893, 47.15855022],
+                        [202.72053428, 47.37893142]])
+        footprint = w.calc_footprint(axes=axes)
+        assert_allclose(footprint, ref)
 
 
 def test_calc_footprint_2():
     """ Test calc_footprint without distortion. """
     fits = get_pkg_data_filename('data/sip.fits')
-    w = wcs.WCS(fits)
+    with pytest.warns(FITSFixedWarning):
+        w = wcs.WCS(fits)
 
-    axes = (1000, 1051)
-    ref = np.array([[202.39265216, 47.17756518],
-                    [202.7469062, 46.91483312],
-                    [203.11487481, 47.14359319],
-                    [202.76092671, 47.40745948]])
-    footprint = w.calc_footprint(axes=axes, undistort=False)
-    assert_allclose(footprint, ref)
+        axes = (1000, 1051)
+        ref = np.array([[202.39265216, 47.17756518],
+                        [202.7469062, 46.91483312],
+                        [203.11487481, 47.14359319],
+                        [202.76092671, 47.40745948]])
+        footprint = w.calc_footprint(axes=axes, undistort=False)
+        assert_allclose(footprint, ref)
 
 
 def test_calc_footprint_3():
@@ -733,16 +811,23 @@ def test_sip():
     assert_allclose(200, y1, 1e-3)
 
 
-def test_printwcs():
+def test_printwcs(capsys):
     """
     Just make sure that it runs
     """
-    h = get_pkg_data_contents('data/spectra/orion-freq-1.hdr', encoding='binary')
-    w = wcs.WCS(h)
-    w.printwcs()
+    h = get_pkg_data_contents(
+        'data/spectra/orion-freq-1.hdr', encoding='binary')
+    with pytest.warns(FITSFixedWarning):
+        w = wcs.WCS(h)
+        w.printwcs()
+        captured = capsys.readouterr()
+        assert 'WCS Keywords' in captured.out
     h = get_pkg_data_contents('data/3d_cd.hdr', encoding='binary')
-    w = wcs.WCS(h)
-    w.printwcs()
+    with pytest.warns(AstropyUserWarning):
+        w = wcs.WCS(h)
+        w.printwcs()
+        captured = capsys.readouterr()
+        assert 'WCS Keywords' in captured.out
 
 
 def test_invalid_spherical():
@@ -805,25 +890,26 @@ def test_sip_tpv_agreement():
     tpv_header = get_pkg_data_contents(
         os.path.join("data", "tpvonly.hdr"), encoding='binary')
 
-    w_sip = wcs.WCS(sip_header)
-    w_tpv = wcs.WCS(tpv_header)
+    with pytest.warns(FITSFixedWarning):
+        w_sip = wcs.WCS(sip_header)
+        w_tpv = wcs.WCS(tpv_header)
 
-    assert_array_almost_equal(
-        w_sip.all_pix2world([w_sip.wcs.crpix], 1),
-        w_tpv.all_pix2world([w_tpv.wcs.crpix], 1))
+        assert_array_almost_equal(
+            w_sip.all_pix2world([w_sip.wcs.crpix], 1),
+            w_tpv.all_pix2world([w_tpv.wcs.crpix], 1))
 
-    w_sip2 = wcs.WCS(w_sip.to_header())
-    w_tpv2 = wcs.WCS(w_tpv.to_header())
+        w_sip2 = wcs.WCS(w_sip.to_header())
+        w_tpv2 = wcs.WCS(w_tpv.to_header())
 
-    assert_array_almost_equal(
-        w_sip.all_pix2world([w_sip.wcs.crpix], 1),
-        w_sip2.all_pix2world([w_sip.wcs.crpix], 1))
-    assert_array_almost_equal(
-        w_tpv.all_pix2world([w_sip.wcs.crpix], 1),
-        w_tpv2.all_pix2world([w_sip.wcs.crpix], 1))
-    assert_array_almost_equal(
-        w_sip2.all_pix2world([w_sip.wcs.crpix], 1),
-        w_tpv2.all_pix2world([w_tpv.wcs.crpix], 1))
+        assert_array_almost_equal(
+            w_sip.all_pix2world([w_sip.wcs.crpix], 1),
+            w_sip2.all_pix2world([w_sip.wcs.crpix], 1))
+        assert_array_almost_equal(
+            w_tpv.all_pix2world([w_sip.wcs.crpix], 1),
+            w_tpv2.all_pix2world([w_sip.wcs.crpix], 1))
+        assert_array_almost_equal(
+            w_sip2.all_pix2world([w_sip.wcs.crpix], 1),
+            w_tpv2.all_pix2world([w_tpv.wcs.crpix], 1))
 
 
 @pytest.mark.skipif('_wcs.__version__[0] < "5"',
@@ -834,11 +920,12 @@ def test_tpv_copy():
     tpv_header = get_pkg_data_contents(
         os.path.join("data", "tpvonly.hdr"), encoding='binary')
 
-    w_tpv = wcs.WCS(tpv_header)
+    with pytest.warns(FITSFixedWarning):
+        w_tpv = wcs.WCS(tpv_header)
 
-    ra, dec = w_tpv.wcs_pix2world([0, 100, 200], [0, -100, 200], 0)
-    assert ra[0] != ra[1] and ra[1] != ra[2]
-    assert dec[0] != dec[1] and dec[1] != dec[2]
+        ra, dec = w_tpv.wcs_pix2world([0, 100, 200], [0, -100, 200], 0)
+        assert ra[0] != ra[1] and ra[1] != ra[2]
+        assert dec[0] != dec[1] and dec[1] != dec[2]
 
 
 def test_hst_wcs():
@@ -882,18 +969,25 @@ def test_list_naxis():
     hdulist = fits.open(path)
     # wcslib will complain about the distortion parameters if they
     # weren't correctly deleted from the header
-    w = wcs.WCS(hdulist[1].header, hdulist, naxis=['celestial'])
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        w = wcs.WCS(hdulist[1].header, hdulist, naxis=['celestial'])
+    _check_v71_dateref_warnings(wrng)
+
     assert w.naxis == 2
     assert w.wcs.naxis == 2
 
     path = get_pkg_data_filename("data/maps/1904-66_SIN.hdr")
     with open(path, 'rb') as fd:
         content = fd.read()
-    w = wcs.WCS(content, naxis=['celestial'])
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        w = wcs.WCS(content, naxis=['celestial'])
+    _check_v71_dateref_warnings(wrng)
     assert w.naxis == 2
     assert w.wcs.naxis == 2
 
-    w = wcs.WCS(content, naxis=['spectral'])
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        w = wcs.WCS(content, naxis=['spectral'])
+    _check_v71_dateref_warnings(wrng)
     assert w.naxis == 0
     assert w.wcs.naxis == 0
     hdulist.close()
@@ -904,7 +998,7 @@ def test_sip_broken():
     # specification in a non-default keyword
     hdr = get_pkg_data_contents("data/sip-broken.hdr")
 
-    w = wcs.WCS(hdr)
+    wcs.WCS(hdr)
 
 
 def test_no_truncate_crval():
@@ -981,14 +1075,14 @@ def test_passing_ImageHDU():
     wcs initialized from header. For #4493.
     """
     path = get_pkg_data_filename('data/validate.fits')
-    hdulist = fits.open(path)
-    wcs_hdu = wcs.WCS(hdulist[0])
-    wcs_header = wcs.WCS(hdulist[0].header)
-    assert wcs_hdu.wcs.compare(wcs_header.wcs)
-    wcs_hdu = wcs.WCS(hdulist[1])
-    wcs_header = wcs.WCS(hdulist[1].header)
-    assert wcs_hdu.wcs.compare(wcs_header.wcs)
-    hdulist.close()
+    with fits.open(path) as hdulist:
+        with pytest.warns(FITSFixedWarning):
+            wcs_hdu = wcs.WCS(hdulist[0])
+            wcs_header = wcs.WCS(hdulist[0].header)
+            assert wcs_hdu.wcs.compare(wcs_header.wcs)
+            wcs_hdu = wcs.WCS(hdulist[1])
+            wcs_header = wcs.WCS(hdulist[1].header)
+            assert wcs_hdu.wcs.compare(wcs_header.wcs)
 
 
 def test_inconsistent_sip():
@@ -996,29 +1090,44 @@ def test_inconsistent_sip():
     Test for #4814
     """
     hdr = get_pkg_data_contents("data/sip-broken.hdr")
-    w = wcs.WCS(hdr)
-    newhdr = w.to_header(relax=None)
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        w = wcs.WCS(hdr)
+    _check_v71_dateref_warnings(wrng)
+    with pytest.warns(AstropyWarning):
+        newhdr = w.to_header(relax=None)
     # CTYPE should not include "-SIP" if relax is None
-    wnew = wcs.WCS(newhdr)
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        wnew = wcs.WCS(newhdr)
+    _check_v71_dateref_warnings(wrng)
     assert all(not ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
     newhdr = w.to_header(relax=False)
     assert('A_0_2' not in newhdr)
     # CTYPE should not include "-SIP" if relax is False
-    wnew = wcs.WCS(newhdr)
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        wnew = wcs.WCS(newhdr)
+    _check_v71_dateref_warnings(wrng)
     assert all(not ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
-    newhdr = w.to_header(key="C")
+    with pytest.warns(AstropyWarning):
+        newhdr = w.to_header(key="C")
     assert('A_0_2' not in newhdr)
     # Test writing header with a different key
-    wnew = wcs.WCS(newhdr, key='C')
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        wnew = wcs.WCS(newhdr, key='C')
+    _check_v71_dateref_warnings(wrng)
     assert all(not ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
-    newhdr = w.to_header(key=" ")
+    with pytest.warns(AstropyWarning):
+        newhdr = w.to_header(key=" ")
     # Test writing a primary WCS to header
-    wnew = wcs.WCS(newhdr)
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        wnew = wcs.WCS(newhdr)
+    _check_v71_dateref_warnings(wrng)
     assert all(not ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
     # Test that "-SIP" is kept into CTYPE if relax=True and
     # "-SIP" was in the original header
     newhdr = w.to_header(relax=True)
-    wnew = wcs.WCS(newhdr)
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        wnew = wcs.WCS(newhdr)
+    _check_v71_dateref_warnings(wrng)
     assert all(ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
     assert('A_0_2' in newhdr)
     # Test that SIP coefficients are also written out.
@@ -1027,10 +1136,14 @@ def test_inconsistent_sip():
     # Test that "-SIP" is added to CTYPE if relax=True and
     # "-SIP" was not in the original header but SIP coefficients
     # are present.
-    w = wcs.WCS(hdr)
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        w = wcs.WCS(hdr)
+    _check_v71_dateref_warnings(wrng)
     w.wcs.ctype = ['RA---TAN', 'DEC--TAN']
     newhdr = w.to_header(relax=True)
-    wnew = wcs.WCS(newhdr)
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        wnew = wcs.WCS(newhdr)
+    _check_v71_dateref_warnings(wrng)
     assert all(ctyp.endswith('-SIP') for ctyp in wnew.wcs.ctype)
 
 
@@ -1074,14 +1187,17 @@ def test_sip_with_altkey():
     fix for #5443.
     """
     with fits.open(get_pkg_data_filename('data/sip.fits')) as f:
-        w = wcs.WCS(f[0].header)
+        with pytest.warns(FITSFixedWarning):
+            w = wcs.WCS(f[0].header)
     # create a header with two WCSs.
     h1 = w.to_header(relax=True, key='A')
     h2 = w.to_header(relax=False)
     h1['CTYPE1A'] = "RA---SIN-SIP"
     h1['CTYPE2A'] = "DEC--SIN-SIP"
     h1.update(h2)
-    w = wcs.WCS(h1, key='A')
+    with catch_warnings(wcs.FITSFixedWarning) as wrng:
+        w = wcs.WCS(h1, key='A')
+    _check_v71_dateref_warnings(wrng)
     assert (w.wcs.ctype == np.array(['RA---SIN-SIP', 'DEC--SIN-SIP'])).all()
 
 
@@ -1090,7 +1206,8 @@ def test_to_fits_1():
     Test to_fits() with LookupTable distortion.
     """
     fits_name = get_pkg_data_filename('data/dist.fits')
-    w = wcs.WCS(fits_name)
+    with pytest.warns(AstropyDeprecationWarning):
+        w = wcs.WCS(fits_name)
     wfits = w.to_fits()
     assert isinstance(wfits, fits.HDUList)
     assert isinstance(wfits[0], fits.PrimaryHDU)
@@ -1107,14 +1224,15 @@ def test_keyedsip():
     del header["CRPIX2"]
 
     w = wcs.WCS(header=header, key="A")
-    assert isinstance( w.sip, wcs.Sip )
+    assert isinstance(w.sip, wcs.Sip)
     assert w.sip.crpix[0] == 2048
     assert w.sip.crpix[1] == 1026
 
 
 def test_zero_size_input():
     with fits.open(get_pkg_data_filename('data/sip.fits')) as f:
-        w = wcs.WCS(f[0].header)
+        with pytest.warns(FITSFixedWarning):
+            w = wcs.WCS(f[0].header)
 
     inp = np.zeros((0, 2))
     assert_array_equal(inp, w.all_pix2world(inp, 0))
@@ -1144,6 +1262,8 @@ def test_scalar_inputs():
     assert result[0].shape == (1,)
 
 
+# Ignore RuntimeWarning raised on s390.
+@pytest.mark.filterwarnings('ignore:.*invalid value encountered in.*')
 def test_footprint_contains():
     """
     Test WCS.footprint_contains(skycoord)
@@ -1173,19 +1293,19 @@ DATE-OBS= '2019-05-09T08:08:26.816Z' / ISO-8601 observation date matching MJD-OB
 NAXIS   =                    2 / NAXIS
 NAXIS1  =                 2136 / length of first array dimension
 NAXIS2  =                 2078 / length of second array dimension
-    """
+    """  # noqa
 
-    header = fits.Header.fromstring(header.strip(),'\n')
+    header = fits.Header.fromstring(header.strip(), '\n')
     test_wcs = wcs.WCS(header)
 
-    hasCoord = test_wcs.footprint_contains(SkyCoord(254,2,unit='deg'))
-    assert hasCoord == True
+    hasCoord = test_wcs.footprint_contains(SkyCoord(254, 2, unit='deg'))
+    assert hasCoord
 
-    hasCoord = test_wcs.footprint_contains(SkyCoord(240,2,unit='deg'))
-    assert hasCoord == False
+    hasCoord = test_wcs.footprint_contains(SkyCoord(240, 2, unit='deg'))
+    assert not hasCoord
 
-    hasCoord = test_wcs.footprint_contains(SkyCoord(24,2,unit='deg'))
-    assert hasCoord == False
+    hasCoord = test_wcs.footprint_contains(SkyCoord(24, 2, unit='deg'))
+    assert not hasCoord
 
 
 def test_cunit():
@@ -1226,10 +1346,13 @@ def test_cunit():
 
 class TestWcsWithTime:
     def setup(self):
-        fname = get_pkg_data_filename(
-            'data/header_with_time.fits')
+        if _WCSLIB_VER >= '7.1':
+            fname = get_pkg_data_filename('data/header_with_time_wcslib71.fits')
+        else:
+            fname = get_pkg_data_filename('data/header_with_time.fits')
         self.header = fits.Header.fromfile(fname)
-        self.w = wcs.WCS(self.header, key='A')
+        with pytest.warns(FITSFixedWarning):
+            self.w = wcs.WCS(self.header, key='A')
 
     def test_keywods2wcsprm(self):
         """ Make sure Wcsprm is populated correctly from the header."""
@@ -1268,7 +1391,42 @@ class TestWcsWithTime:
                     'timeoffs', 'telapse', 'czphs', 'cperi']
 
         for key in num_keys:
-            assert_allclose(getattr(self.w.wcs, key), self.header.get(key, np.nan))
+            if key.upper() == 'MJDREF':
+                hdrv = [self.header.get('MJDREFIA', np.nan),
+                        self.header.get('MJDREFFA', np.nan)]
+            else:
+                hdrv = self.header.get(key, np.nan)
+            assert_allclose(getattr(self.w.wcs, key), hdrv)
 
     def test_transforms(self):
-        assert_allclose(self.w.all_pix2world(*self.w.wcs.crpix, 1), self.w.wcs.crval)
+        assert_allclose(self.w.all_pix2world(*self.w.wcs.crpix, 1),
+                        self.w.wcs.crval)
+
+
+def test_invalid_coordinate_masking():
+
+    # Regression test for an issue which caused all coordinates to be set to NaN
+    # after a transformation rather than just the invalid ones as reported by
+    # WCSLIB. A specific example of this is that when considering an all-sky
+    # spectral cube with a spectral axis that is not correlated with the sky
+    # axes, if transforming pixel coordinates that did not fall 'in' the sky,
+    # the spectral world value was also masked even though that coordinate
+    # was valid.
+
+    w = wcs.WCS(naxis=3)
+    w.wcs.ctype = 'VELO_LSR', 'GLON-CAR', 'GLAT-CAR'
+    w.wcs.crval = -20, 0, 0
+    w.wcs.crpix = 1, 1441, 241
+    w.wcs.cdelt = 1.3, -0.125, 0.125
+
+    px = [-10, -10, 20]
+    py = [-10, 10, 20]
+    pz = [-10, 10, 20]
+
+    wx, wy, wz = w.wcs_pix2world(px, py, pz, 0)
+
+    # Before fixing this, wx used to return np.nan for the first element
+
+    assert_allclose(wx, [-33, -33, 6])
+    assert_allclose(wy, [np.nan, 178.75, 177.5])
+    assert_allclose(wz, [np.nan, -28.75, -27.5])

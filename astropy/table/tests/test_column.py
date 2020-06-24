@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-
+from astropy.utils.tests.test_metadata import MetaBaseTest
 import operator
 
 import pytest
 import numpy as np
+from numpy.testing import assert_array_equal
 
 from astropy.tests.helper import assert_follows_unicode_guidelines, catch_warnings
 from astropy import table
@@ -210,7 +211,7 @@ class TestColumn():
         assert np.all(d_nounit.to(u.dimensionless_unscaled) == np.array([1, 2, 3]))
 
         # make sure the correct copy/no copy behavior is happening
-        q = [1, 3, 5]*u.km
+        q = [1, 3, 5] * u.km
 
         # to should always make a copy
         d.to(u.km)[:] = q
@@ -320,6 +321,35 @@ class TestColumn():
         c1 = c.insert(1, [5, 6], axis=1)
         assert np.all(c1 == [[1, 5, 2], [3, 6, 4]])
 
+    def test_insert_string_expand(self, Column):
+        c = Column(['a', 'b'])
+        c1 = c.insert(0, 'abc')
+        assert np.all(c1 == ['abc', 'a', 'b'])
+
+        c = Column(['a', 'b'])
+        c1 = c.insert(0, ['c', 'def'])
+        assert np.all(c1 == ['c', 'def', 'a', 'b'])
+
+    def test_insert_string_masked_values(self):
+        c = table.MaskedColumn(['a', 'b'])
+        c1 = c.insert(0, np.ma.masked)
+        assert np.all(c1 == ['', 'a', 'b'])
+        assert np.all(c1.mask == [True, False, False])
+        assert c1.dtype == 'U1'
+        c2 = c.insert(1, np.ma.MaskedArray(['ccc', 'dd'], mask=[True, False]))
+        assert np.all(c2 == ['a', 'ccc', 'dd', 'b'])
+        assert np.all(c2.mask == [False, True, False, False])
+        assert c2.dtype == 'U3'
+
+    def test_insert_string_type_error(self, Column):
+        c = Column([1, 2])
+        with pytest.raises(ValueError, match='invalid literal for int'):
+            c.insert(0, 'string')
+
+        c = Column(['a', 'b'])
+        with pytest.raises(TypeError, match='string operation on non-string array'):
+            c.insert(0, 1)
+
     def test_insert_multidim(self, Column):
         c = Column([[1, 2],
                     [3, 4]], name='a', dtype=int)
@@ -341,7 +371,8 @@ class TestColumn():
 
         # Basic insert
         c1 = c.insert(1, [100, 200])
-        assert np.all(c1 == ['a', [100, 200], 1, None])
+        assert np.all(c1 == np.array(['a', [100, 200], 1, None],
+                                     dtype=object))
 
     def test_insert_masked(self):
         c = table.MaskedColumn([0, 1, 2], name='a', fill_value=9999,
@@ -469,9 +500,6 @@ class TestAttrEqual():
 # and any minimal set of args to pass.
 
 
-from astropy.utils.tests.test_metadata import MetaBaseTest
-
-
 class TestMetaColumn(MetaBaseTest):
     test_class = table.Column
     args = ()
@@ -498,7 +526,8 @@ def test_getitem_metadata_regression():
     assert c[1:2].format == '%i'
     assert c[1:2].meta['c'] == 8
 
-    c = table.MaskedColumn(data=[1, 2], name='a', description='b', unit='m', format="%i", meta={'c': 8})
+    c = table.MaskedColumn(data=[1, 2], name='a', description='b',
+                           unit='m', format="%i", meta={'c': 8})
     assert c[1:2].name == 'a'
     assert c[1:2].description == 'b'
     assert c[1:2].unit == 'm'
@@ -507,7 +536,8 @@ def test_getitem_metadata_regression():
 
     # As above, but with take() - check the method and the function
 
-    c = table.Column(data=[1, 2, 3], name='a', description='b', unit='m', format="%i", meta={'c': 8})
+    c = table.Column(data=[1, 2, 3], name='a', description='b',
+                     unit='m', format="%i", meta={'c': 8})
     for subset in [c.take([0, 1]), np.take(c, [0, 1])]:
         assert subset.name == 'a'
         assert subset.description == 'b'
@@ -521,7 +551,8 @@ def test_getitem_metadata_regression():
         assert subset.shape == ()
         assert not isinstance(subset, table.Column)
 
-    c = table.MaskedColumn(data=[1, 2, 3], name='a', description='b', unit='m', format="%i", meta={'c': 8})
+    c = table.MaskedColumn(data=[1, 2, 3], name='a', description='b',
+                           unit='m', format="%i", meta={'c': 8})
     for subset in [c.take([0, 1]), np.take(c, [0, 1])]:
         assert subset.name == 'a'
         assert subset.description == 'b'
@@ -576,7 +607,7 @@ def test_qtable_column_conversion():
 
     # Regression test for #5342: if a function unit is assigned, the column
     # should become the appropriate FunctionQuantity subclass.
-    qtab['f'].unit = u.dex(u.cm/u.s**2)
+    qtab['f'].unit = u.dex(u.cm / u.s**2)
     assert isinstance(qtab['f'], u.Dex)
 
 
@@ -679,6 +710,23 @@ def test_col_unicode_sandwich_create_from_str(Column):
 
 
 @pytest.mark.parametrize('Column', (table.Column, table.MaskedColumn))
+def test_col_unicode_sandwich_bytes_obj(Column):
+    """
+    Create a Column of dtype object with bytestring in it and make sure
+    it keeps the bytestring and not convert to str with accessed.
+    """
+    c = Column([None, b'def'])
+    assert c.dtype.char == 'O'
+    assert not c[0]
+    assert c[1] == b'def'
+    assert isinstance(c[1], bytes)
+    assert not isinstance(c[1], str)
+    assert isinstance(c[:0], table.Column)
+    assert np.all(c[:2] == np.array([None, b'def']))
+    assert not np.all(c[:2] == np.array([None, 'def']))
+
+
+@pytest.mark.parametrize('Column', (table.Column, table.MaskedColumn))
 def test_col_unicode_sandwich_bytes(Column):
     """
     Create a bytestring Column from bytes and ensure that it works in Python 3 in
@@ -759,7 +807,7 @@ def test_masked_col_unicode_sandwich():
     assert c[:].dtype.char == 'S'
 
     ok = c == ['abc', 'def']
-    assert ok[0] == True
+    assert ok[0] == True  # noqa
     assert ok[1] is np.ma.masked
     assert np.all(c == [b'abc', b'def'])
     assert np.all(c == np.array(['abc', 'def']))
@@ -768,7 +816,7 @@ def test_masked_col_unicode_sandwich():
     for cmp in ('abc', b'abc'):
         ok = c == cmp
         assert type(ok) is np.ma.MaskedArray
-        assert ok[0] == True
+        assert ok[0] == True  # noqa
         assert ok[1] is np.ma.masked
 
 
@@ -853,3 +901,11 @@ def test_unicode_sandwich_masked_compare():
 
     # Note: comparisons <, >, >=, <= fail to return a masked array entirely,
     # see https://github.com/numpy/numpy/issues/10092.
+
+
+def test_structured_masked_column_roundtrip():
+    mc = table.MaskedColumn([(1., 2.), (3., 4.)],
+                            mask=[(False, False), (False, False)], dtype='f8,f8')
+    assert len(mc.dtype.fields) == 2
+    mc2 = table.MaskedColumn(mc)
+    assert_array_equal(mc2, mc)

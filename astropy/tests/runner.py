@@ -56,12 +56,12 @@ class TestRunnerBase:
 
     A test runner can be constructed by creating a subclass of this class and
     defining 'keyword' methods. These are methods that have the
-    `~astropy.tests.runner.keyword` decorator, these methods are used to
+    :class:`~astropy.tests.runner.keyword` decorator, these methods are used to
     construct allowed keyword arguments to the
-    `~astropy.tests.runner.TestRunnerBase.run_tests` method as a way to allow
+    ``run_tests`` method as a way to allow
     customization of individual keyword arguments (and associated logic)
     without having to re-implement the whole
-    `~astropy.tests.runner.TestRunnerBase.run_tests` method.
+    ``run_tests`` method.
 
     Examples
     --------
@@ -165,25 +165,29 @@ class TestRunnerBase:
 
         Parameters
         ----------
-        {keywords}
+{keywords}
 
         """
 
-    _required_dependancies = ['pytest', 'pytest_remotedata', 'pytest_doctestplus']
-    _missing_dependancy_error = "Test dependencies are missing. You should install the 'pytest-astropy' package."
+    _required_dependencies = ['pytest', 'pytest_remotedata', 'pytest_doctestplus', 'pytest_astropy_header']
+    _missing_dependancy_error = (
+        "Test dependencies are missing: {module}. You should install the "
+        "'pytest-astropy' package (you may need to update the package if you "
+        "have a previous version installed, e.g., "
+        "'pip install pytest-astropy --upgrade' or the equivalent with conda).")
 
     @classmethod
     def _has_test_dependencies(cls):  # pragma: no cover
         # Using the test runner will not work without these dependencies, but
         # pytest-openfiles is optional, so it's not listed here.
-        for module in cls._required_dependancies:
+        for module in cls._required_dependencies:
             spec = find_spec(module)
             # Checking loader accounts for packages that were uninstalled
             if spec is None or spec.loader is None:
-                raise RuntimeError(cls._missing_dependancy_error)
+                raise RuntimeError(
+                    cls._missing_dependancy_error.format(module=module))
 
     def run_tests(self, **kwargs):
-
         # The following option will include eggs inside a .eggs folder in
         # sys.path when running the tests. This is possible so that when
         # runnning python setup.py test, test dependencies installed via e.g.
@@ -247,7 +251,7 @@ class TestRunnerBase:
         """
         Constructs a `TestRunner` to run in the given path, and returns a
         ``test()`` function which takes the same arguments as
-        `TestRunner.run_tests`.
+        ``TestRunner.run_tests``.
 
         The returned ``test()`` function will be defined in the module this
         was called from.  This is used to implement the ``astropy.test()``
@@ -413,7 +417,7 @@ class TestRunner(TestRunnerBase):
 
         return []
 
-    @keyword(default_value=['astropy.tests.plugins.display'])
+    @keyword(default_value=[])
     def plugins(self, plugins, kwargs):
         """
         plugins : list, optional

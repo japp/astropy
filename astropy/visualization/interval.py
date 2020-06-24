@@ -40,13 +40,15 @@ class BaseInterval(BaseTransform):
             The mininium and maximum image value in the interval.
         """
 
+        raise NotImplementedError('Needs to be implemented in a subclass.')
+
     def __call__(self, values, clip=True, out=None):
         """
         Transform values using this interval.
 
         Parameters
         ----------
-        values : array-like
+        values : array_like
             The input values.
         clip : bool, optional
             If `True` (default), values outside the [0:1] range are
@@ -99,8 +101,14 @@ class ManualInterval(BaseInterval):
         self.vmax = vmax
 
     def get_limits(self, values):
-        vmin = np.nanmin(values) if self.vmin is None else self.vmin
-        vmax = np.nanmax(values) if self.vmax is None else self.vmax
+        # Make sure values is a Numpy array
+        values = np.asarray(values).ravel()
+
+        # Filter out invalid values (inf, nan)
+        values = values[np.isfinite(values)]
+
+        vmin = np.min(values) if self.vmin is None else self.vmin
+        vmax = np.max(values) if self.vmax is None else self.vmax
         return vmin, vmax
 
 
@@ -110,7 +118,13 @@ class MinMaxInterval(BaseInterval):
     """
 
     def get_limits(self, values):
-        return np.nanmin(values), np.nanmax(values)
+        # Make sure values is a Numpy array
+        values = np.asarray(values).ravel()
+
+        # Filter out invalid values (inf, nan)
+        values = values[np.isfinite(values)]
+
+        return np.min(values), np.max(values)
 
 
 class AsymmetricPercentileInterval(BaseInterval):
@@ -148,9 +162,8 @@ class AsymmetricPercentileInterval(BaseInterval):
         values = values[np.isfinite(values)]
 
         # Determine values at percentiles
-        vmin, vmax = np.nanpercentile(values,
-                                      (self.lower_percentile,
-                                       self.upper_percentile))
+        vmin, vmax = np.percentile(values, (self.lower_percentile,
+                                            self.upper_percentile))
 
         return vmin, vmax
 
@@ -181,10 +194,10 @@ class ZScaleInterval(BaseInterval):
     """
     Interval based on IRAF's zscale.
 
-    http://iraf.net/forum/viewtopic.php?showtopic=134139
+    https://iraf.net/forum/viewtopic.php?showtopic=134139
 
     Original implementation:
-    https://trac.stsci.edu/ssb/stsci_python/browser/stsci_python/trunk/numdisplay/lib/stsci/numdisplay/zscale.py?rev=19347
+    https://github.com/spacetelescope/stsci.numdisplay/blob/master/lib/stsci/numdisplay/zscale.py
 
     Licensed under a 3-clause BSD style license (see AURA_LICENSE.rst).
 
@@ -203,9 +216,9 @@ class ZScaleInterval(BaseInterval):
         the returned values are the minimum and maximum of the data.
         Defaults to 0.5.
     min_npixels : int, optional
-        If less than ``min_npixels`` pixels are rejected, then the
-        returned values are the minimum and maximum of the data.
-        Defaults to 5.
+        If there are less than ``min_npixels`` pixels remaining after
+        the pixel rejection, then the returned values are the minimum
+        and maximum of the data.  Defaults to 5.
     krej : float, optional
         The number of sigma used for the rejection. Defaults to 2.5.
     max_iterations : int, optional
@@ -247,7 +260,7 @@ class ZScaleInterval(BaseInterval):
         ngrow = max(1, int(npix * 0.01))
         kernel = np.ones(ngrow, dtype=bool)
 
-        for niter in range(self.max_iterations):
+        for _ in range(self.max_iterations):
             if ngoodpix >= last_ngoodpix or ngoodpix < minpix:
                 break
 
@@ -270,9 +283,9 @@ class ZScaleInterval(BaseInterval):
             last_ngoodpix = ngoodpix
             ngoodpix = np.sum(~badpix)
 
-        slope, intercept = fit
-
         if ngoodpix >= minpix:
+            slope, _ = fit
+
             if self.contrast > 0:
                 slope = slope / self.contrast
             center_pixel = (npix - 1) // 2

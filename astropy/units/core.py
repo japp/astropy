@@ -413,11 +413,9 @@ def set_enabled_equivalencies(equivalencies):
         >>> from astropy import units as u
         >>> with u.set_enabled_equivalencies(u.dimensionless_angles()):
         ...     phase = 0.5 * u.cycle
-        ...     np.exp(1j*phase)  # doctest: +SKIP
-        <Quantity  -1. +1.22464680e-16j>
+        ...     np.exp(1j*phase)  # doctest: +FLOAT_CMP
+        <Quantity -1.+1.2246468e-16j>
     """
-    # doctest skipped as the complex number formatting changed in numpy 1.14.
-    #
     # get a context with a new registry, using all units of the current one
     context = _UnitContext(get_current_unit_registry())
     # in this new current registry, enable the equivalencies requested
@@ -1385,20 +1383,17 @@ class UnitBase:
         `find_equivalent_units`.
         """
 
+        HEADING_NAMES = ('Primary name', 'Unit definition', 'Aliases')
+        ROW_LEN = 3  # len(HEADING_NAMES), but hard-code since it is constant
+        NO_EQUIV_UNITS_MSG = 'There are no equivalent units'
+
         def __repr__(self):
             if len(self) == 0:
-                return "[]"
+                return self.NO_EQUIV_UNITS_MSG
             else:
-                lines = []
-                for u in self:
-                    irred = u.decompose().to_string()
-                    if irred == u.name:
-                        irred = "irreducible"
-                    lines.append((u.name, irred, ', '.join(u.aliases)))
-
-                lines.sort()
-                lines.insert(0, ('Primary name', 'Unit definition', 'Aliases'))
-                widths = [0, 0, 0]
+                lines = self._process_equivalent_units(self)
+                lines.insert(0, self.HEADING_NAMES)
+                widths = [0] * self.ROW_LEN
                 for line in lines:
                     for i, col in enumerate(line):
                         widths[i] = max(widths[i], len(col))
@@ -1410,6 +1405,46 @@ class UnitBase:
                          [f'{x} ,' for x in lines[1:]] +
                          [']'])
                 return '\n'.join(lines)
+
+        def _repr_html_(self):
+            """
+            Outputs a HTML table representation within Jupyter notebooks.
+            """
+            if len(self) == 0:
+                return "<p>{}</p>".format(self.NO_EQUIV_UNITS_MSG)
+            else:
+                # HTML tags to use to compose the table in HTML
+                blank_table = '<table style="width:50%">{}</table>'
+                blank_row_container = "<tr>{}</tr>"
+                heading_row_content = "<th>{}</th>" * self.ROW_LEN
+                data_row_content = "<td>{}</td>" * self.ROW_LEN
+
+                # The HTML will be rendered & the table is simple, so don't
+                # bother to include newlines & indentation for the HTML code.
+                heading_row = blank_row_container.format(
+                    heading_row_content.format(*self.HEADING_NAMES))
+                data_rows = self._process_equivalent_units(self)
+                all_rows = heading_row
+                for row in data_rows:
+                    html_row = blank_row_container.format(
+                        data_row_content.format(*row))
+                    all_rows += html_row
+                return blank_table.format(all_rows)
+
+        @staticmethod
+        def _process_equivalent_units(equiv_units_data):
+            """
+            Extract attributes, and sort, the equivalent units pre-formatting.
+            """
+            processed_equiv_units = []
+            for u in equiv_units_data:
+                irred = u.decompose().to_string()
+                if irred == u.name:
+                    irred = 'irreducible'
+                processed_equiv_units.append(
+                    (u.name, irred, ', '.join(u.aliases)))
+            processed_equiv_units.sort()
+            return processed_equiv_units
 
     def find_equivalent_units(self, equivalencies=[], units=None,
                               include_prefix_units=False):
@@ -2233,7 +2268,7 @@ def _add_prefixes(u, excludes=[], namespace=None, prefixes=False):
                 # for some formatters.
                 if prefix == 'u':
                     format['latex'] = r'\mu ' + u.get_format_name('latex')
-                    format['unicode'] = 'μ' + u.get_format_name('unicode')
+                    format['unicode'] = '\N{MICRO SIGN}' + u.get_format_name('unicode')
 
                 for key, val in u._format.items():
                     format.setdefault(key, prefix + val)
@@ -2342,10 +2377,7 @@ def _condition_arg(value):
     ValueError
         If value is not as expected
     """
-    if isinstance(value, (float, int, complex)):
-        return value
-
-    if isinstance(value, np.ndarray) and value.dtype.kind in ['i', 'f', 'c']:
+    if isinstance(value, (np.ndarray, float, int, complex)):
         return value
 
     avalue = np.array(value)

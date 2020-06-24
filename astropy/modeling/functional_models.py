@@ -1,27 +1,25 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
 """Mathematical models."""
-
-
-from collections import OrderedDict
-
+# pylint: disable=line-too-long, too-many-lines, too-many-arguments, invalid-name
 import numpy as np
 
 from astropy import units as u
 from astropy.units import Quantity, UnitsError
-from .core import (Fittable1DModel, Fittable2DModel,
-                   ModelDefinitionError)
+from astropy.utils.decorators import deprecated
+from .core import (Fittable1DModel, Fittable2DModel)
 
 from .parameters import Parameter, InputParameterError
 from .utils import ellipse_extent
 
 
 __all__ = ['AiryDisk2D', 'Moffat1D', 'Moffat2D', 'Box1D', 'Box2D', 'Const1D',
-           'Const2D', 'Ellipse2D', 'Disk2D', 'Gaussian1D', 'Gaussian2D', 'Linear1D',
-           'Lorentz1D', 'MexicanHat1D', 'MexicanHat2D', 'RedshiftScaleFactor',
-           'Multiply', 'Planar2D', 'Scale', 'Sersic1D', 'Sersic2D', 'Shift',
-           'Sine1D', 'Trapezoid1D', 'TrapezoidDisk2D', 'Ring2D', 'Voigt1D', 'KingProjectedAnalytic1D']
-
+           'Const2D', 'Ellipse2D', 'Disk2D', 'Gaussian1D', 'Gaussian2D',
+           'Linear1D', 'Lorentz1D', 'RickerWavelet1D', 'RickerWavelet2D',
+           'RedshiftScaleFactor', 'Multiply', 'Planar2D', 'Scale',
+           'Sersic1D', 'Sersic2D', 'Shift', 'Sine1D', 'Trapezoid1D',
+           'TrapezoidDisk2D', 'Ring2D', 'Voigt1D', 'KingProjectedAnalytic1D',
+           'Exponential1D', 'Logarithmic1D']
 
 TWOPI = 2 * np.pi
 FLOAT_EPSILON = float(np.finfo(np.float32).tiny)
@@ -180,13 +178,12 @@ class Gaussian1D(Fittable1DModel):
     def input_units(self):
         if self.mean.unit is None:
             return None
-        else:
-            return {'x': self.mean.unit}
+        return {self.inputs[0]: self.mean.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('mean', inputs_unit['x']),
-                            ('stddev', inputs_unit['x']),
-                            ('amplitude', outputs_unit['y'])])
+        return {'mean': inputs_unit[self.inputs[0]],
+                'stddev': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Gaussian2D(Fittable2DModel):
@@ -289,21 +286,16 @@ class Gaussian2D(Fittable2DModel):
             if x_stddev is not None or y_stddev is not None or theta is not None:
                 raise InputParameterError("Cannot specify both cov_matrix and "
                                           "x/y_stddev/theta")
-            else:
-                # Compute principle coordinate system transformation
-                cov_matrix = np.array(cov_matrix)
+            # Compute principle coordinate system transformation
+            cov_matrix = np.array(cov_matrix)
 
-                if cov_matrix.shape != (2, 2):
-                    # TODO: Maybe it should be possible for the covariance matrix
-                    # to be some (x, y, ..., z, 2, 2) array to be broadcast with
-                    # other parameters of shape (x, y, ..., z)
-                    # But that's maybe a special case to work out if/when needed
-                    raise ValueError("Covariance matrix must be 2x2")
+            if cov_matrix.shape != (2, 2):
+                raise ValueError("Covariance matrix must be 2x2")
 
-                eig_vals, eig_vecs = np.linalg.eig(cov_matrix)
-                x_stddev, y_stddev = np.sqrt(eig_vals)
-                y_vec = eig_vecs[:, 0]
-                theta = np.arctan2(y_vec[1], y_vec[0])
+            eig_vals, eig_vecs = np.linalg.eig(cov_matrix)
+            x_stddev, y_stddev = np.sqrt(eig_vals)
+            y_vec = eig_vecs[:, 0]
+            theta = np.arctan2(y_vec[1], y_vec[0])
 
         # Ensure stddev makes sense if its bounds are not explicitly set.
         # stddev must be non-zero and positive.
@@ -433,22 +425,21 @@ class Gaussian2D(Fittable2DModel):
     def input_units(self):
         if self.x_mean.unit is None and self.y_mean.unit is None:
             return None
-        else:
-            return {'x': self.x_mean.unit,
-                    'y': self.y_mean.unit}
+        return {self.inputs[0]: self.x_mean.unit,
+                self.inputs[1]: self.y_mean.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
         # Note that here we need to make sure that x and y are in the same
         # units otherwise this can lead to issues since rotation is not well
         # defined.
-        if inputs_unit['x'] != inputs_unit['y']:
+        if inputs_unit[self.inputs[0]] != inputs_unit[self.inputs[1]]:
             raise UnitsError("Units of 'x' and 'y' inputs should match")
-        return OrderedDict([('x_mean', inputs_unit['x']),
-                            ('y_mean', inputs_unit['x']),
-                            ('x_stddev', inputs_unit['x']),
-                            ('y_stddev', inputs_unit['x']),
-                            ('theta', u.rad),
-                            ('amplitude', outputs_unit['z'])])
+        return {'x_mean': inputs_unit[self.inputs[0]],
+                'y_mean': inputs_unit[self.inputs[0]],
+                'x_stddev': inputs_unit[self.inputs[0]],
+                'y_stddev': inputs_unit[self.inputs[0]],
+                'theta': u.rad,
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Shift(Fittable1DModel):
@@ -468,8 +459,7 @@ class Shift(Fittable1DModel):
     def input_units(self):
         if self.offset.unit is None:
             return None
-        else:
-            return {'x': self.offset.unit}
+        return {self.inputs[0]: self.offset.unit}
 
     @property
     def inverse(self):
@@ -496,7 +486,7 @@ class Shift(Fittable1DModel):
         return [d_offset]
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('offset', outputs_unit['y'])])
+        return {'offset': outputs_unit[self.outputs[0]]}
 
 
 class Scale(Fittable1DModel):
@@ -527,8 +517,7 @@ class Scale(Fittable1DModel):
     def input_units(self):
         if self.factor.unit is None:
             return None
-        else:
-            return {'x': self.factor.unit}
+        return {self.inputs[0]: self.factor.unit}
 
     @property
     def inverse(self):
@@ -553,10 +542,7 @@ class Scale(Fittable1DModel):
         return [d_factor]
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        unit = outputs_unit['y'] / inputs_unit['x']
-        if unit == u.one:
-            unit = None
-        return OrderedDict([('factor', unit)])
+        return {'factor': outputs_unit[self.outputs[0]]}
 
 
 class Multiply(Fittable1DModel):
@@ -568,9 +554,6 @@ class Multiply(Fittable1DModel):
     factor : float
         Factor by which to multiply a coordinate.
     """
-
-    inputs = ('x',)
-    outputs = ('y',)
 
     factor = Parameter(default=1)
     linear = True
@@ -596,7 +579,7 @@ class Multiply(Fittable1DModel):
         return [d_factor]
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('factor', outputs_unit['y'])])
+        return {'factor': outputs_unit[self.outputs[0]]}
 
 
 class RedshiftScaleFactor(Fittable1DModel):
@@ -726,12 +709,11 @@ class Sersic1D(Fittable1DModel):
     def input_units(self):
         if self.r_eff.unit is None:
             return None
-        else:
-            return {'x': self.r_eff.unit}
+        return {self.inputs[0]: self.r_eff.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('r_eff', inputs_unit['x']),
-                            ('amplitude', outputs_unit['y'])])
+        return {'r_eff': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Sine1D(Fittable1DModel):
@@ -812,12 +794,11 @@ class Sine1D(Fittable1DModel):
     def input_units(self):
         if self.frequency.unit is None:
             return None
-        else:
-            return {'x': 1. / self.frequency.unit}
+        return {self.inputs[0]: 1. / self.frequency.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('frequency', inputs_unit['x'] ** -1),
-                            ('amplitude', outputs_unit['y'])])
+        return {'frequency': inputs_unit[self.inputs[0]] ** -1,
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Linear1D(Fittable1DModel):
@@ -871,12 +852,11 @@ class Linear1D(Fittable1DModel):
     def input_units(self):
         if self.intercept.unit is None and self.slope.unit is None:
             return None
-        else:
-            return {'x': self.intercept.unit / self.slope.unit}
+        return {self.inputs[0]: self.intercept.unit / self.slope.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('intercept', outputs_unit['y']),
-                            ('slope', outputs_unit['y'] / inputs_unit['x'])])
+        return {'intercept': outputs_unit[self.outputs[0]],
+                'slope': outputs_unit[self.outputs[0]] / inputs_unit[self.inputs[0]]}
 
 
 class Planar2D(Fittable2DModel):
@@ -922,9 +902,9 @@ class Planar2D(Fittable2DModel):
         return [d_slope_x, d_slope_y, d_intercept]
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('intercept', outputs_unit['z']),
-                            ('slope_x', outputs_unit['z'] / inputs_unit['x']),
-                            ('slope_y', outputs_unit['z'] / inputs_unit['y'])])
+        return {'intercept': outputs_unit['z'],
+                'slope_x': outputs_unit['z'] / inputs_unit['x'],
+                'slope_y': outputs_unit['z'] / inputs_unit['y']}
 
 
 class Lorentz1D(Fittable1DModel):
@@ -938,11 +918,11 @@ class Lorentz1D(Fittable1DModel):
     x_0 : float
         Position of the peak
     fwhm : float
-        Full width at half maximum
+        Full width at half maximum (FWHM)
 
     See Also
     --------
-    Gaussian1D, Box1D, MexicanHat1D
+    Gaussian1D, Box1D, RickerWavelet1D
 
     Notes
     -----
@@ -951,6 +931,8 @@ class Lorentz1D(Fittable1DModel):
     .. math::
 
         f(x) = \\frac{A \\gamma^{2}}{\\gamma^{2} + \\left(x - x_{0}\\right)^{2}}
+
+    where :math:`\\gamma` is half of given FWHM.
 
     Examples
     --------
@@ -1017,13 +999,12 @@ class Lorentz1D(Fittable1DModel):
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit}
+        return {self.inputs[0]: self.x_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('fwhm', inputs_unit['x']),
-                            ('amplitude', outputs_unit['y'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'fwhm': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Voigt1D(Fittable1DModel):
@@ -1114,21 +1095,21 @@ class Voigt1D(Fittable1DModel):
         dyda = [-constant * dVdx * 2 * sqrt_ln2 / fwhm_G,
                 constant * V / amplitude_L,
                 constant * (V / fwhm_L + dVdy * sqrt_ln2 / fwhm_G),
-                -constant * (V + (sqrt_ln2 / fwhm_G) * (2 * (x - x_0) * dVdx + fwhm_L * dVdy)) / fwhm_G]
+                -constant * (V + (sqrt_ln2 / fwhm_G) * (2 * (x - x_0) *
+                                                        dVdx + fwhm_L * dVdy)) / fwhm_G]
         return dyda
 
     @property
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit}
+        return {self.inputs[0]: self.x_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('fwhm_L', inputs_unit['x']),
-                            ('fwhm_G', inputs_unit['x']),
-                            ('amplitude_L', outputs_unit['y'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'fwhm_L': inputs_unit[self.inputs[0]],
+                'fwhm_G': inputs_unit[self.inputs[0]],
+                'amplitude_L': outputs_unit[self.outputs[0]]}
 
 
 class Const1D(Fittable1DModel):
@@ -1190,8 +1171,7 @@ class Const1D(Fittable1DModel):
 
         if isinstance(amplitude, Quantity):
             return Quantity(x, unit=amplitude.unit, copy=False)
-        else:
-            return x
+        return x
 
     @staticmethod
     def fit_deriv(x, amplitude):
@@ -1205,7 +1185,7 @@ class Const1D(Fittable1DModel):
         return None
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('amplitude', outputs_unit['y'])])
+        return {'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Const2D(Fittable2DModel):
@@ -1246,15 +1226,14 @@ class Const2D(Fittable2DModel):
 
         if isinstance(amplitude, Quantity):
             return Quantity(x, unit=amplitude.unit, copy=False)
-        else:
-            return x
+        return x
 
     @property
     def input_units(self):
         return None
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('amplitude', outputs_unit['z'])])
+        return {'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Ellipse2D(Fittable2DModel):
@@ -1349,8 +1328,7 @@ class Ellipse2D(Fittable2DModel):
 
         if isinstance(amplitude, Quantity):
             return Quantity(result, unit=amplitude.unit, copy=False)
-        else:
-            return result
+        return result
 
     @property
     def bounding_box(self):
@@ -1372,22 +1350,21 @@ class Ellipse2D(Fittable2DModel):
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit,
-                    'y': self.y_0.unit}
+        return {self.inputs[0]: self.x_0.unit,
+                self.inputs[1]: self.y_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
         # Note that here we need to make sure that x and y are in the same
         # units otherwise this can lead to issues since rotation is not well
         # defined.
-        if inputs_unit['x'] != inputs_unit['y']:
+        if inputs_unit[self.inputs[0]] != inputs_unit[self.inputs[1]]:
             raise UnitsError("Units of 'x' and 'y' inputs should match")
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('y_0', inputs_unit['x']),
-                            ('a', inputs_unit['x']),
-                            ('b', inputs_unit['x']),
-                            ('theta', u.rad),
-                            ('amplitude', outputs_unit['z'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'y_0': inputs_unit[self.inputs[0]],
+                'a': inputs_unit[self.inputs[0]],
+                'b': inputs_unit[self.inputs[0]],
+                'theta': u.rad,
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Disk2D(Fittable2DModel):
@@ -1437,8 +1414,7 @@ class Disk2D(Fittable2DModel):
 
         if isinstance(amplitude, Quantity):
             return Quantity(result, unit=amplitude.unit, copy=False)
-        else:
-            return result
+        return result
 
     @property
     def bounding_box(self):
@@ -1455,20 +1431,19 @@ class Disk2D(Fittable2DModel):
     def input_units(self):
         if self.x_0.unit is None and self.y_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit,
-                    'y': self.y_0.unit}
+        return {self.inputs[0]: self.x_0.unit,
+                self.inputs[1]: self.y_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
         # Note that here we need to make sure that x and y are in the same
         # units otherwise this can lead to issues since rotation is not well
         # defined.
-        if inputs_unit['x'] != inputs_unit['y']:
+        if inputs_unit[self.inputs[0]] != inputs_unit[self.inputs[1]]:
             raise UnitsError("Units of 'x' and 'y' inputs should match")
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('y_0', inputs_unit['x']),
-                            ('R_0', inputs_unit['x']),
-                            ('amplitude', outputs_unit['z'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'y_0': inputs_unit[self.inputs[0]],
+                'R_0': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Ring2D(Fittable2DModel):
@@ -1542,8 +1517,7 @@ class Ring2D(Fittable2DModel):
 
         if isinstance(amplitude, Quantity):
             return Quantity(result, unit=amplitude.unit, copy=False)
-        else:
-            return result
+        return result
 
     @property
     def bounding_box(self):
@@ -1562,35 +1536,20 @@ class Ring2D(Fittable2DModel):
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit,
-                    'y': self.y_0.unit}
+        return {self.inputs[0]: self.x_0.unit,
+                self.inputs[1]: self.y_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
         # Note that here we need to make sure that x and y are in the same
         # units otherwise this can lead to issues since rotation is not well
         # defined.
-        if inputs_unit['x'] != inputs_unit['y']:
+        if inputs_unit[self.inputs[0]] != inputs_unit[self.inputs[1]]:
             raise UnitsError("Units of 'x' and 'y' inputs should match")
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('y_0', inputs_unit['x']),
-                            ('r_in', inputs_unit['x']),
-                            ('width', inputs_unit['x']),
-                            ('amplitude', outputs_unit['z'])])
-
-
-class Delta1D(Fittable1DModel):
-    """One dimensional Dirac delta function."""
-
-    def __init__(self):
-        raise ModelDefinitionError("Not implemented")
-
-
-class Delta2D(Fittable2DModel):
-    """Two dimensional Dirac delta function."""
-
-    def __init__(self):
-        raise ModelDefinitionError("Not implemented")
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'y_0': inputs_unit[self.inputs[0]],
+                'r_in': inputs_unit[self.inputs[0]],
+                'width': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Box1D(Fittable1DModel):
@@ -1655,12 +1614,7 @@ class Box1D(Fittable1DModel):
         """One dimensional Box model function"""
 
         inside = np.logical_and(x >= x_0 - width / 2., x <= x_0 + width / 2.)
-        result = np.select([inside], [amplitude], 0)
-
-        if isinstance(amplitude, Quantity):
-            return Quantity(result, unit=amplitude.unit, copy=False)
-        else:
-            return result
+        return np.select([inside], [amplitude], 0)
 
     @property
     def bounding_box(self):
@@ -1678,13 +1632,18 @@ class Box1D(Fittable1DModel):
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit}
+        return {self.inputs[0]: self.x_0.unit}
+
+    @property
+    def return_units(self):
+        if self.amplitude.unit is None:
+            return None
+        return {self.outputs[0]: self.amplitude.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('width', inputs_unit['x']),
-                            ('amplitude', outputs_unit['y'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'width': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Box2D(Fittable2DModel):
@@ -1743,8 +1702,7 @@ class Box2D(Fittable2DModel):
 
         if isinstance(amplitude, Quantity):
             return Quantity(result, unit=amplitude.unit, copy=False)
-        else:
-            return result
+        return result
 
     @property
     def bounding_box(self):
@@ -1764,16 +1722,15 @@ class Box2D(Fittable2DModel):
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit,
-                    'y': self.y_0.unit}
+        return {self.inputs[0]: self.x_0.unit,
+                self.inputs[1]: self.y_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('y_0', inputs_unit['y']),
-                            ('x_width', inputs_unit['x']),
-                            ('y_width', inputs_unit['y']),
-                            ('amplitude', outputs_unit['z'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'y_0': inputs_unit[self.inputs[1]],
+                'x_width': inputs_unit[self.inputs[0]],
+                'y_width': inputs_unit[self.inputs[1]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Trapezoid1D(Fittable1DModel):
@@ -1845,8 +1802,7 @@ class Trapezoid1D(Fittable1DModel):
 
         if isinstance(amplitude, Quantity):
             return Quantity(result, unit=amplitude.unit, copy=False)
-        else:
-            return result
+        return result
 
     @property
     def bounding_box(self):
@@ -1864,14 +1820,13 @@ class Trapezoid1D(Fittable1DModel):
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit}
+        return {self.inputs[0]: self.x_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('width', inputs_unit['x']),
-                            ('slope', outputs_unit['y'] / inputs_unit['x']),
-                            ('amplitude', outputs_unit['y'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'width': inputs_unit[self.inputs[0]],
+                'slope': outputs_unit[self.outputs[0]] / inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class TrapezoidDisk2D(Fittable2DModel):
@@ -1915,8 +1870,7 @@ class TrapezoidDisk2D(Fittable2DModel):
 
         if isinstance(amplitude, Quantity):
             return Quantity(result, unit=amplitude.unit, copy=False)
-        else:
-            return result
+        return result
 
     @property
     def bounding_box(self):
@@ -1935,9 +1889,8 @@ class TrapezoidDisk2D(Fittable2DModel):
     def input_units(self):
         if self.x_0.unit is None and self.y_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit,
-                    'y': self.y_0.unit}
+        return {self.inputs[0]: self.x_0.unit,
+                self.inputs[1]: self.y_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
         # Note that here we need to make sure that x and y are in the same
@@ -1945,16 +1898,22 @@ class TrapezoidDisk2D(Fittable2DModel):
         # defined.
         if inputs_unit['x'] != inputs_unit['y']:
             raise UnitsError("Units of 'x' and 'y' inputs should match")
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('y_0', inputs_unit['x']),
-                            ('R_0', inputs_unit['x']),
-                            ('slope', outputs_unit['z'] / inputs_unit['x']),
-                            ('amplitude', outputs_unit['z'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'y_0': inputs_unit[self.inputs[0]],
+                'R_0': inputs_unit[self.inputs[0]],
+                'slope': outputs_unit[self.outputs[0]] / inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
-class MexicanHat1D(Fittable1DModel):
+class RickerWavelet1D(Fittable1DModel):
     """
-    One dimensional Mexican Hat model.
+    One dimensional Ricker Wavelet model (sometimes known as a "Mexican Hat"
+    model).
+
+    .. note::
+
+        See https://github.com/astropy/astropy/pull/9445 for discussions
+        related to renaming of this model.
 
     Parameters
     ----------
@@ -1963,11 +1922,11 @@ class MexicanHat1D(Fittable1DModel):
     x_0 : float
         Position of the peak
     sigma : float
-        Width of the Mexican hat
+        Width of the Ricker wavelet
 
     See Also
     --------
-    MexicanHat2D, Box1D, Gaussian1D, Trapezoid1D
+    RickerWavelet2D, Box1D, Gaussian1D, Trapezoid1D
 
     Notes
     -----
@@ -1986,10 +1945,10 @@ class MexicanHat1D(Fittable1DModel):
         import numpy as np
         import matplotlib.pyplot as plt
 
-        from astropy.modeling.models import MexicanHat1D
+        from astropy.modeling.models import RickerWavelet1D
 
         plt.figure()
-        s1 = MexicanHat1D()
+        s1 = RickerWavelet1D()
         r = np.arange(-5, 5, .01)
 
         for factor in range(1, 4):
@@ -2007,7 +1966,7 @@ class MexicanHat1D(Fittable1DModel):
 
     @staticmethod
     def evaluate(x, amplitude, x_0, sigma):
-        """One dimensional Mexican Hat model function"""
+        """One dimensional Ricker Wavelet model function"""
 
         xx_ww = (x - x_0) ** 2 / (2 * sigma ** 2)
         return amplitude * (1 - 2 * xx_ww) * np.exp(-xx_ww)
@@ -2031,18 +1990,23 @@ class MexicanHat1D(Fittable1DModel):
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit}
+        return {self.inputs[0]: self.x_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('sigma', inputs_unit['x']),
-                            ('amplitude', outputs_unit['y'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'sigma': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
-class MexicanHat2D(Fittable2DModel):
+class RickerWavelet2D(Fittable2DModel):
     """
-    Two dimensional symmetric Mexican Hat model.
+    Two dimensional Ricker Wavelet model (sometimes known as a "Mexican Hat"
+    model).
+
+    .. note::
+
+        See https://github.com/astropy/astropy/pull/9445 for discussions
+        related to renaming of this model.
 
     Parameters
     ----------
@@ -2053,11 +2017,11 @@ class MexicanHat2D(Fittable2DModel):
     y_0 : float
         y position of the peak
     sigma : float
-        Width of the Mexican hat
+        Width of the Ricker wavelet
 
     See Also
     --------
-    MexicanHat1D, Gaussian2D
+    RickerWavelet1D, Gaussian2D
 
     Notes
     -----
@@ -2078,7 +2042,7 @@ class MexicanHat2D(Fittable2DModel):
 
     @staticmethod
     def evaluate(x, y, amplitude, x_0, y_0, sigma):
-        """Two dimensional Mexican Hat model function"""
+        """Two dimensional Ricker Wavelet model function"""
 
         rr_ww = ((x - x_0) ** 2 + (y - y_0) ** 2) / (2 * sigma ** 2)
         return amplitude * (1 - rr_ww) * np.exp(- rr_ww)
@@ -2087,20 +2051,19 @@ class MexicanHat2D(Fittable2DModel):
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit,
-                    'y': self.y_0.unit}
+        return {self.inputs[0]: self.x_0.unit,
+                self.inputs[1]: self.y_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
         # Note that here we need to make sure that x and y are in the same
         # units otherwise this can lead to issues since rotation is not well
         # defined.
-        if inputs_unit['x'] != inputs_unit['y']:
+        if inputs_unit[self.inputs[0]] != inputs_unit[self.inputs[1]]:
             raise UnitsError("Units of 'x' and 'y' inputs should match")
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('y_0', inputs_unit['x']),
-                            ('sigma', inputs_unit['x']),
-                            ('amplitude', outputs_unit['z'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'y_0': inputs_unit[self.inputs[0]],
+                'sigma': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class AiryDisk2D(Fittable2DModel):
@@ -2188,20 +2151,19 @@ class AiryDisk2D(Fittable2DModel):
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit,
-                    'y': self.y_0.unit}
+        return {self.inputs[0]: self.x_0.unit,
+                self.inputs[1]: self.y_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
         # Note that here we need to make sure that x and y are in the same
         # units otherwise this can lead to issues since rotation is not well
         # defined.
-        if inputs_unit['x'] != inputs_unit['y']:
+        if inputs_unit[self.inputs[0]] != inputs_unit[self.inputs[1]]:
             raise UnitsError("Units of 'x' and 'y' inputs should match")
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('y_0', inputs_unit['x']),
-                            ('radius', inputs_unit['x']),
-                            ('amplitude', outputs_unit['z'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'y_0': inputs_unit[self.inputs[0]],
+                'radius': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Moffat1D(Fittable1DModel):
@@ -2264,7 +2226,7 @@ class Moffat1D(Fittable1DModel):
         """
         Moffat full width at half maximum.
         Derivation of the formula is available in
-        `this notebook by Yoonsoo Bach <http://nbviewer.jupyter.org/github/ysbach/AO_2017/blob/master/04_Ground_Based_Concept.ipynb#1.2.-Moffat>`_.
+        `this notebook by Yoonsoo Bach <https://nbviewer.jupyter.org/github/ysbach/AO_2017/blob/master/04_Ground_Based_Concept.ipynb#1.2.-Moffat>`_.
         """
         return 2.0 * np.abs(self.gamma) * np.sqrt(2.0 ** (1.0 / self.alpha) - 1.0)
 
@@ -2290,13 +2252,12 @@ class Moffat1D(Fittable1DModel):
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit}
+        return {self.inputs[0]: self.x_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('gamma', inputs_unit['x']),
-                            ('amplitude', outputs_unit['y'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'gamma': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Moffat2D(Fittable2DModel):
@@ -2341,7 +2302,7 @@ class Moffat2D(Fittable2DModel):
         """
         Moffat full width at half maximum.
         Derivation of the formula is available in
-        `this notebook by Yoonsoo Bach <http://nbviewer.jupyter.org/github/ysbach/AO_2017/blob/master/04_Ground_Based_Concept.ipynb#1.2.-Moffat>`_.
+        `this notebook by Yoonsoo Bach <https://nbviewer.jupyter.org/github/ysbach/AO_2017/blob/master/04_Ground_Based_Concept.ipynb#1.2.-Moffat>`_.
         """
         return 2.0 * np.abs(self.gamma) * np.sqrt(2.0 ** (1.0 / self.alpha) - 1.0)
 
@@ -2372,19 +2333,19 @@ class Moffat2D(Fittable2DModel):
         if self.x_0.unit is None:
             return None
         else:
-            return {'x': self.x_0.unit,
-                    'y': self.y_0.unit}
+            return {self.inputs[0]: self.x_0.unit,
+                    self.inputs[1]: self.y_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
         # Note that here we need to make sure that x and y are in the same
         # units otherwise this can lead to issues since rotation is not well
         # defined.
-        if inputs_unit['x'] != inputs_unit['y']:
+        if inputs_unit[self.inputs[0]] != inputs_unit[self.inputs[1]]:
             raise UnitsError("Units of 'x' and 'y' inputs should match")
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('y_0', inputs_unit['x']),
-                            ('gamma', inputs_unit['x']),
-                            ('amplitude', outputs_unit['z'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'y_0': inputs_unit[self.inputs[0]],
+                'gamma': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class Sersic2D(Fittable2DModel):
@@ -2426,7 +2387,7 @@ class Sersic2D(Fittable2DModel):
 
     .. math::
 
-        \Gamma(2n) = 2\gamma (b_n,2n)
+        \Gamma(2n) = 2\gamma (2n,b_n)
 
     Examples
     --------
@@ -2493,21 +2454,20 @@ class Sersic2D(Fittable2DModel):
     def input_units(self):
         if self.x_0.unit is None:
             return None
-        else:
-            return {'x': self.x_0.unit,
-                    'y': self.y_0.unit}
+        return {self.inputs[0]: self.x_0.unit,
+                self.inputs[1]: self.y_0.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
         # Note that here we need to make sure that x and y are in the same
         # units otherwise this can lead to issues since rotation is not well
         # defined.
-        if inputs_unit['x'] != inputs_unit['y']:
+        if inputs_unit[self.inputs[0]] != inputs_unit[self.inputs[1]]:
             raise UnitsError("Units of 'x' and 'y' inputs should match")
-        return OrderedDict([('x_0', inputs_unit['x']),
-                            ('y_0', inputs_unit['x']),
-                            ('r_eff', inputs_unit['x']),
-                            ('theta', u.rad),
-                            ('amplitude', outputs_unit['z'])])
+        return {'x_0': inputs_unit[self.inputs[0]],
+                'y_0': inputs_unit[self.inputs[0]],
+                'r_eff': inputs_unit[self.inputs[0]],
+                'theta': u.rad,
+                'amplitude': outputs_unit[self.outputs[0]]}
 
 
 class KingProjectedAnalytic1D(Fittable1DModel):
@@ -2586,10 +2546,10 @@ class KingProjectedAnalytic1D(Fittable1DModel):
         """
 
         result = amplitude * r_core ** 2 * (1/np.sqrt(x ** 2 + r_core ** 2) -
-                                          1/np.sqrt(r_tide ** 2 + r_core ** 2)) ** 2
+                                            1/np.sqrt(r_tide ** 2 + r_core ** 2)) ** 2
 
         # Set invalid r values to 0
-        bounds = (x >= r_tide) | (x<0)
+        bounds = (x >= r_tide) | (x < 0)
         result[bounds] = result[bounds] * 0.
 
         return result
@@ -2636,10 +2596,118 @@ class KingProjectedAnalytic1D(Fittable1DModel):
     def input_units(self):
         if self.r_core.unit is None:
             return None
-        else:
-            return {'x': self.r_core.unit}
+        return {self.inputs[0]: self.r_core.unit}
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('r_core', inputs_unit['x']),
-                            ('r_tide', inputs_unit['x']),
-                            ('amplitude', outputs_unit['y'])])
+        return {'r_core': inputs_unit[self.inputs[0]],
+                'r_tide': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
+
+
+class Logarithmic1D(Fittable1DModel):
+    """
+    One dimensional logarithmic model.
+
+    Parameters
+    ----------
+    amplitude : float, optional
+    tau : float, optional
+
+    See Also
+    --------
+    Exponential1D, Gaussian1D
+    """
+
+    amplitude = Parameter(default=1)
+    tau = Parameter(default=1)
+
+    @staticmethod
+    def evaluate(x, amplitude, tau):
+        return amplitude * np.log(x / tau)
+
+    @staticmethod
+    def fit_deriv(x, amplitude, tau):
+        d_amplitude = np.log(x / tau)
+        d_tau = np.zeros(x.shape) - (amplitude / tau)
+        return [d_amplitude, d_tau]
+
+    @property
+    def inverse(self):
+        new_amplitude = self.tau
+        new_tau = self.amplitude
+        return Exponential1D(amplitude=new_amplitude, tau=new_tau)
+
+    @tau.validator
+    def tau(self, val):
+        if val == 0:
+            raise ValueError("0 is not an allowed value for tau")
+
+    @property
+    def input_units(self):
+        if self.tau.unit is None:
+            return None
+        return {self.inputs[0]: self.tau.unit}
+
+    def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
+        return {'tau': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
+
+
+class Exponential1D(Fittable1DModel):
+    """
+    One dimensional exponential model.
+
+    Parameters
+    ----------
+    amplitude : float, optional
+    tau : float, optional
+
+    See Also
+    --------
+    Logarithmic1D, Gaussian1D
+    """
+    amplitude = Parameter(default=1)
+    tau = Parameter(default=1)
+
+    @staticmethod
+    def evaluate(x, amplitude, tau):
+        return amplitude * np.exp(x / tau)
+
+    @staticmethod
+    def fit_deriv(x, amplitude, tau):
+        ''' Derivative with respect to parameters'''
+        d_amplitude = np.exp(x / tau)
+        d_tau = -amplitude * (x / tau**2) * np.exp(x / tau)
+        return [d_amplitude, d_tau]
+
+    @property
+    def inverse(self):
+        new_amplitude = self.tau
+        new_tau = self.amplitude
+        return Logarithmic1D(amplitude=new_amplitude, tau=new_tau)
+
+    @tau.validator
+    def tau(self, val):
+        ''' tau cannot be 0'''
+        if val == 0:
+            raise ValueError("0 is not an allowed value for tau")
+
+    @property
+    def input_units(self):
+        if self.tau.unit is None:
+            return None
+        return {self.inputs[0]: self.tau.unit}
+
+    def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
+        return {'tau': inputs_unit[self.inputs[0]],
+                'amplitude': outputs_unit[self.outputs[0]]}
+
+
+@deprecated('4.0', alternative='RickerWavelet1D')
+class MexicanHat1D(RickerWavelet1D):
+    """ Deprecated."""
+
+
+@deprecated('4.0', alternative='RickerWavelet2D')
+class MexicanHat2D(RickerWavelet2D):
+    """  Deprecated."""

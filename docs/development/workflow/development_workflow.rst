@@ -87,9 +87,10 @@ The naming scheme used by `git`_ will also be used here. A plain branch name,
 like ``master`` means a branch in your local copy of Astropy. A branch on a
 remote, like ``astropy`` , is labeled by that remote, ``astropy/master``.
 
-This duplication of names can get very confusing for maintainers when trying
-to merge code contributions into the official master branch,
-``astropy/master``. As a result, you should never do any work in your master
+This duplication of names can get very confusing when working with pull
+requests, especially when the official master branch, ``astropy/master``,
+changes due to other contibutions before your contributions are merged in.
+As a result, you should never do any work in your master
 branch, ``master``. Always work on a branch instead.
 
 Essential `git`_ commands
@@ -191,7 +192,7 @@ Fetch the latest Astropy
 From time to time you should fetch the development version (i.e. Astropy
 ``astropy/master``) changes from GitHub::
 
-   git fetch astropy
+   git fetch astropy --tags
 
 This will pull down any commits you don't have, and set the remote branches to
 point to the latest commit. For example, 'trunk' is the branch referred to by
@@ -221,7 +222,7 @@ Always make your branch from ``astropy/master`` so that you are basing your
 changes on the latest version of Astropy::
 
     # Update the mirror of trunk
-    git fetch astropy
+    git fetch astropy --tags
 
     # Make new feature branch starting at astropy/master
     git branch my-new-feature astropy/master
@@ -250,17 +251,20 @@ setup in this section will make that easier.
 Install your branch
 *******************
 
-Ideally you should set up a python virtual environment just for this fix;
+Ideally you should set up a Python virtual environment just for this fix;
 instructions for doing to are at :ref:`virtual_envs`. Doing so ensures you
-will not corrupt your main astropy install and makes it very easy to recover
+will not corrupt your main ``astropy`` install and makes it very easy to recover
 from mistakes.
 
-Once you have activated that environment you need to install the version of
-Astropy you are working on. Do that with:
+Once you have activated that environment, you need to install the version of
+``astropy`` you are working on. Do that with:
 
 .. code-block:: bash
 
     pip install -e .
+
+For more details on building ``astropy`` from source, see
+:ref:`dev-build-astropy-subpkg`.
 
 .. _edit-flow:
 
@@ -304,16 +308,17 @@ In more detail
    Tests can also be run from the command line while in the package
    root directory, e.g.::
 
-     python setup.py test
+     pytest
 
    To run the tests in only a single package, e.g. Time, you can do::
 
-     python setup.py test -P time
+     pytest -P time
 
    For more details on running tests, please see :ref:`testing-guidelines`.
 
-#. Make sure your code includes appropriate docstrings, described at
-   :ref:`doc-rules`. If appropriate, as when you are adding a new feature,
+#. Make sure your code includes appropriate docstrings, in the
+   `Numpydoc format`_.
+   If appropriate, as when you are adding a new feature,
    you should update the appropriate documentation in the ``docs`` directory;
    a detailed description is in :ref:`documentation-guidelines`.
 
@@ -321,14 +326,11 @@ In more detail
    the documentation builds and looks correct by running, from the
    ``astropy`` directory::
 
-     python setup.py build_docs
+     cd docs
+     make html
 
    The last line should just state ``build succeeded``, and should not mention
    any warnings.  (For more details, see :ref:`documentation-guidelines`.)
-
-   .. note::
-       If the build_docs command is not found, try running ``python setup.py
-       build_sphinx`` instead.
 
 #. Add tests of your new code, if appropriate. Some changes (e.g. to
    documentation) do not need tests. Detailed instructions are at
@@ -428,6 +430,22 @@ You may be asked to make changes in the discussion of the pull request. Make
 those changes in your local copy, commit them to your local repo and push them
 to GitHub. GitHub will automatically update your pull request.
 
+.. _no git pull:
+
+Do Not Create a Merge Commit
+****************************
+
+If your branch associated with the pull request falls behind the ``master``
+branch of https://github.com/astropy/astropy, GitHub might offer you the option
+to catch up or resolve conflicts via its web interface, but do not use this. Using
+the web interface might create a "merge commit" in your commit history, which is
+undesirable, as a "merge commit" can introduce maintenance overhead for the
+release manager as well as undesirable branch structure complexity. Do not use the ``git pull`` command either.
+
+Instead, in your local checkout, do a ``fetch`` and then a ``rebase``, and
+resolve conflicts as necessary. See :ref:`rebase` and :ref:`howto_rebase`
+for further information.
+
 .. _rebase:
 
 Rebase, but only if asked
@@ -474,9 +492,10 @@ The actual rebasing is usually easy::
     git fetch astropy master # get the latest development astropy
     git rebase astropy/master my-new-feature
 
-You are more likely to run into *conflicts* here--places where the changes you
-made conflict with changes that someone else made--than anywhere else. Ask for
-help if you need it.
+You are more likely to run into *conflicts* here — places where the changes you
+made conflict with changes that someone else made — than anywhere else. Ask for
+help if you need it. Instructions are available on how to
+`resolve merge conflicts after a Git rebase <https://help.github.com/en/articles/resolving-merge-conflicts-after-a-git-rebase>`_.
 
 .. _howto_squash:
 
@@ -529,3 +548,4 @@ can delete any backup branches that may have been created::
 .. _git book: https://git-scm.com/book/
 .. _Astropy issue list: https://github.com/astropy/astropy/issues
 .. _git choose-your-own-adventure: http://sethrobertson.github.io/GitFixUm/fixup.html
+.. _Numpydoc format: https://numpydoc.readthedocs.io/en/latest/format.html 

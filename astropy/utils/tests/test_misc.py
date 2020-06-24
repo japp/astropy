@@ -1,15 +1,15 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
 import json
-import os
-from datetime import datetime
 import locale
+import os
+import socket
+from datetime import datetime
 
 import pytest
 import numpy as np
 
 from astropy.utils import data, misc
-from astropy.utils.exceptions import AstropyDeprecationWarning
 
 
 def test_isiterable():
@@ -28,8 +28,14 @@ def test_signal_number_to_name_no_failure():
 
 @pytest.mark.remote_data
 def test_api_lookup():
-    strurl = misc.find_api_page('astropy.utils.misc', 'dev', False, timeout=3)
-    objurl = misc.find_api_page(misc, 'dev', False, timeout=3)
+    try:
+        strurl = misc.find_api_page('astropy.utils.misc', 'dev', False, timeout=3)
+        objurl = misc.find_api_page(misc, 'dev', False, timeout=3)
+    except socket.timeout:
+        if os.environ.get('CI', False):
+            pytest.xfail('Timed out in CI')
+        else:
+            raise
 
     assert strurl == objurl
     assert strurl == 'http://devdocs.astropy.org/utils/index.html#module-astropy.utils.misc'  # noqa
@@ -79,17 +85,17 @@ def test_JsonCustomEncoder():
     assert newd == tmpd
 
 
+@pytest.mark.filterwarnings("ignore")
 def test_inherit_docstrings():
-    with pytest.warns(AstropyDeprecationWarning, match="inherits docstring"):
-        class Base(metaclass=misc.InheritDocstrings):
-            def __call__(self, *args):
-                "FOO"
-                pass
+    class Base(metaclass=misc.InheritDocstrings):
+        def __call__(self, *args):
+            "FOO"
+            pass
 
-            @property
-            def bar(self):
-                "BAR"
-                pass
+        @property
+        def bar(self):
+            "BAR"
+            pass
 
     class Subclass(Base):
         def __call__(self, *args):
@@ -121,27 +127,17 @@ def test_set_locale():
     date = datetime(2000, 10, 1, 0, 0, 0)
     day_mon = date.strftime('%a, %b')
 
-    with misc.set_locale('en_US'):
+    with misc._set_locale('en_US'):
         assert date.strftime('%a, %b') == 'Sun, Oct'
 
-    with misc.set_locale('de_DE'):
+    with misc._set_locale('de_DE'):
         assert date.strftime('%a, %b') == 'So, Okt'
 
     # Back to original
     assert date.strftime('%a, %b') == day_mon
 
-    with misc.set_locale(current):
+    with misc._set_locale(current):
         assert date.strftime('%a, %b') == day_mon
-
-
-def test_check_broadcast():
-    assert misc.check_broadcast((10, 1), (3,)) == (10, 3)
-    assert misc.check_broadcast((10, 1), (3,), (4, 1, 1, 3)) == (4, 1, 10, 3)
-    with pytest.raises(ValueError):
-        misc.check_broadcast((10, 2), (3,))
-
-    with pytest.raises(ValueError):
-        misc.check_broadcast((10, 1), (3,), (4, 1, 2, 3))
 
 
 def test_dtype_bytes_or_chars():

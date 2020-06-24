@@ -17,6 +17,10 @@ from astropy.coordinates import Angle
 from astropy.visualization.units import quantity_support
 
 
+def teardown_function(function):
+    plt.close('all')
+
+
 @pytest.mark.skipif('not HAS_PLT')
 def test_units():
     plt.figure()
@@ -35,8 +39,6 @@ def test_units():
         assert plt.gca().xaxis.get_units() == u.m
         assert plt.gca().yaxis.get_units() == u.kg
 
-    plt.clf()
-
 
 @pytest.mark.skipif('not HAS_PLT')
 def test_units_errbarr():
@@ -53,8 +55,6 @@ def test_units_errbarr():
 
         assert ax.xaxis.get_units() == u.s
         assert ax.yaxis.get_units() == u.m
-
-    plt.clf()
 
 
 @pytest.mark.skipif('not HAS_PLT')
@@ -74,8 +74,6 @@ def test_incompatible_units():
         plt.plot([1, 2, 3] * u.m)
         with pytest.raises(err_type):
             plt.plot([105, 210, 315] * u.kg)
-
-    plt.clf()
 
 
 @pytest.mark.skipif('not HAS_PLT')
@@ -117,3 +115,15 @@ def test_nested():
 
         assert ax.xaxis.get_units() == u.arcsec
         assert ax.yaxis.get_units() == u.pc
+
+
+@pytest.mark.skipif('not HAS_PLT')
+def test_empty_hist():
+
+    with quantity_support():
+        fig = plt.figure()
+        ax = fig.add_subplot(1, 1, 1)
+        ax.hist([1, 2, 3, 4] * u.mmag, bins=100)
+        # The second call results in an empty list being passed to the
+        # unit converter in matplotlib >= 3.1
+        ax.hist([] * u.mmag, bins=100)

@@ -18,20 +18,146 @@ References
 ----------
 .. [1] Calabretta, M.R., Greisen, E.W., 2002, A&A, 395, 1077 (Paper II)
 """
+# pylint: disable=invalid-name, too-many-arguments, no-member
 
 import math
 
 import numpy as np
 
-from .core import Model
-from .parameters import Parameter
 from astropy.coordinates.matrix_utilities import rotation_matrix, matrix_product
 from astropy import units as u
-from astropy.utils.decorators import deprecated
+from .core import Model
+from .parameters import Parameter
 from .utils import _to_radian, _to_orig_unit
 
 __all__ = ['RotateCelestial2Native', 'RotateNative2Celestial', 'Rotation2D',
-           'EulerAngleRotation']
+           'EulerAngleRotation', 'RotationSequence3D', 'SphericalRotationSequence']
+
+
+def _create_matrix(angles, axes_order):
+    matrices = []
+    for angle, axis in zip(angles, axes_order):
+        if isinstance(angle, u.Quantity):
+            angle = angle.value
+        angle = angle.item()
+        matrices.append(rotation_matrix(angle, axis, unit=u.rad))
+    result = matrix_product(*matrices[::-1])
+    return result
+
+
+def spherical2cartesian(alpha, delta):
+    alpha = np.deg2rad(alpha)
+    delta = np.deg2rad(delta)
+    x = np.cos(alpha) * np.cos(delta)
+    y = np.cos(delta) * np.sin(alpha)
+    z = np.sin(delta)
+    return np.array([x, y, z])
+
+
+def cartesian2spherical(x, y, z):
+    h = np.hypot(x, y)
+    alpha = np.rad2deg(np.arctan2(y, x))
+    delta = np.rad2deg(np.arctan2(z, h))
+    return alpha, delta
+
+
+class RotationSequence3D(Model):
+    """
+    Perform a series of rotations about different axis in 3D space.
+
+    Positive angles represent a counter-clockwise rotation.
+
+    Parameters
+    ----------
+    angles : array_like
+        Angles of rotation in deg in the order of axes_order.
+    axes_order : str
+        A sequence of 'x', 'y', 'z' corresponding to axis of rotation.
+
+    Examples
+    --------
+    >>> model = RotationSequence3D([1.1, 2.1, 3.1, 4.1], axes_order='xyzx')
+
+    """
+    standard_broadcasting = False
+    _separable = False
+    n_inputs = 3
+    n_outputs = 3
+
+    angles = Parameter(default=[], getter=_to_orig_unit, setter=_to_radian)
+
+    def __init__(self, angles, axes_order, name=None):
+        self.axes = ['x', 'y', 'z']
+        unrecognized = set(axes_order).difference(self.axes)
+        if unrecognized:
+            raise ValueError("Unrecognized axis label {0}; "
+                             "should be one of {1} ".format(unrecognized,
+                                                            self.axes))
+        self.axes_order = axes_order
+        if len(angles) != len(axes_order):
+            raise ValueError("The number of angles {0} should match the number \
+                              of axes {1}.".format(len(angles),
+                                                   len(axes_order)))
+        super().__init__(angles, name=name)
+        self._inputs = ('x', 'y', 'z')
+        self._outputs = ('x', 'y', 'z')
+
+    @property
+    def inverse(self):
+        """Inverse rotation."""
+        angles = self.angles.value[::-1] * -1
+        return self.__class__(angles, axes_order=self.axes_order[::-1])
+
+    def evaluate(self, x, y, z, angles):
+        """
+        Apply the rotation to a set of 3D Cartesian coordinates.
+        """
+        if x.shape != y.shape != z.shape:
+            raise ValueError("Expected input arrays to have the same shape")
+        # Note: If the original shape was () (an array scalar) convert to a
+        # 1-element 1-D array on output for consistency with most other models
+        orig_shape = x.shape or (1,)
+        inarr = np.array([x.flatten(), y.flatten(), z.flatten()])
+        result = np.dot(_create_matrix(angles[0], self.axes_order), inarr)
+        x, y, z = result[0], result[1], result[2]
+        x.shape = y.shape = z.shape = orig_shape
+        return x, y, z
+
+
+class SphericalRotationSequence(RotationSequence3D):
+    """
+    Perform a sequence of rotations about arbitrary number of axes
+    in spherical coordinates.
+
+    Parameters
+    ----------
+    angles : list
+        A sequence of angles (in deg).
+    axes_order : str
+        A sequence of characters ('x', 'y', or 'z') corresponding to the
+        axis of rotation and matching the order in ``angles``.
+
+    """
+    def __init__(self, angles, axes_order, name=None, **kwargs):
+        self._n_inputs = 2
+        self._n_outputs = 2
+        super().__init__(angles, axes_order=axes_order, name=name, **kwargs)
+        self._inputs = ("lon", "lat")
+        self._outputs = ("lon", "lat")
+
+    @property
+    def n_inputs(self):
+        return self._n_inputs
+
+    @property
+    def n_outputs(self):
+        return self._n_outputs
+
+    def evaluate(self, lon, lat, angles):
+        x, y, z = spherical2cartesian(lon, lat)
+        x1, y1, z1 = super().evaluate(x, y, z, angles)
+        lon, lat = cartesian2spherical(x1, y1, z1)
+        return lon, lat
 
 
 class _EulerRotation:
@@ -41,56 +167,16 @@ class _EulerRotation:
 
     _separable = False
 
-    def _create_matrix(self, phi, theta, psi, axes_order):
-        matrices = []
-        for angle, axis in zip([phi, theta, psi], axes_order):
-            if isinstance(angle, u.Quantity):
-                angle = angle.value
-            angle = angle.item()
-            matrices.append(rotation_matrix(angle, axis, unit=u.rad))
-        result = matrix_product(*matrices[::-1])
-        return result
-
-    @staticmethod
-    def spherical2cartesian(alpha, delta):
-        alpha = np.deg2rad(alpha)
-        delta = np.deg2rad(delta)
-        x = np.cos(alpha) * np.cos(delta)
-        y = np.cos(delta) * np.sin(alpha)
-        z = np.sin(delta)
-        return np.array([x, y, z])
-
-    @staticmethod
-    def cartesian2spherical(x, y, z):
-        h = np.hypot(x, y)
-        alpha = np.rad2deg(np.arctan2(y, x))
-        delta = np.rad2deg(np.arctan2(z, h))
-        return alpha, delta
-
-    @deprecated(2.0)
-    @staticmethod
-    def rotation_matrix_from_angle(angle):
-        """
-        Clockwise rotation matrix.
-
-        Parameters
-        ----------
-        angle : float
-            Rotation angle in radians.
-        """
-        return np.array([[math.cos(angle), math.sin(angle)],
-                         [-math.sin(angle), math.cos(angle)]])
-
     def evaluate(self, alpha, delta, phi, theta, psi, axes_order):
         shape = None
         if isinstance(alpha, np.ndarray) and alpha.ndim == 2:
             alpha = alpha.flatten()
             delta = delta.flatten()
             shape = alpha.shape
-        inp = self.spherical2cartesian(alpha, delta)
-        matrix = self._create_matrix(phi, theta, psi, axes_order)
+        inp = spherical2cartesian(alpha, delta)
+        matrix = _create_matrix([phi, theta, psi], axes_order)
         result = np.dot(matrix, inp)
-        a, b = self.cartesian2spherical(*result)
+        a, b = cartesian2spherical(*result)
         if shape is not None:
             a.shape = shape
             b.shape = shape
@@ -103,12 +189,14 @@ class _EulerRotation:
     @property
     def input_units(self):
         """ Input units. """
-        return {'alpha': u.deg, 'delta': u.deg}
+        return {self.inputs[0]: u.deg,
+                self.inputs[1]: u.deg}
 
     @property
     def return_units(self):
         """ Output units. """
-        return {'alpha': u.deg, 'delta': u.deg}
+        return {self.outputs[0]: u.deg,
+                self.outputs[1]: u.deg}
 
 
 class EulerAngleRotation(_EulerRotation, Model):
@@ -129,8 +217,8 @@ class EulerAngleRotation(_EulerRotation, Model):
         where each character denotes an axis in 3D space.
     """
 
-    inputs = ('alpha', 'delta')
-    outputs = ('alpha', 'delta')
+    n_inputs = 2
+    n_outputs = 2
 
     phi = Parameter(default=0, getter=_to_orig_unit, setter=_to_radian)
     theta = Parameter(default=0, getter=_to_orig_unit, setter=_to_radian)
@@ -152,7 +240,10 @@ class EulerAngleRotation(_EulerRotation, Model):
             raise TypeError("All parameters should be of the same type - float or Quantity.")
 
         super().__init__(phi=phi, theta=theta, psi=psi, **kwargs)
+        self._inputs = ('alpha', 'delta')
+        self._outputs = ('alpha', 'delta')
 
+    @property
     def inverse(self):
         return self.__class__(phi=-self.psi,
                               theta=-self.theta,
@@ -206,27 +297,29 @@ class RotateNative2Celestial(_SkyRotation):
 
     Notes
     -----
-    If ``lon``, ``lat`` and ``lon_pole`` are numerical values they should be in units of deg.
+    If ``lon``, ``lat`` and ``lon_pole`` are numerical values they
+    should be in units of deg. Inputs are angles on the native sphere.
+    Outputs are angles on the celestial sphere.
     """
 
-    #: Inputs are angles on the native sphere
-    inputs = ('phi_N', 'theta_N')
-
-    #: Outputs are angles on the celestial sphere
-    outputs = ('alpha_C', 'delta_C')
+    n_inputs = 2
+    n_outputs = 2
 
     @property
     def input_units(self):
         """ Input units. """
-        return {'phi_N': u.deg, 'theta_N': u.deg}
+        return {self.inputs[0]: u.deg,
+                self.inputs[1]: u.deg}
 
     @property
     def return_units(self):
         """ Output units. """
-        return {'alpha_C': u.deg, 'delta_C': u.deg}
+        return {self.outputs[0]: u.deg, self.outputs[1]: u.deg}
 
     def __init__(self, lon, lat, lon_pole, **kwargs):
         super().__init__(lon, lat, lon_pole, **kwargs)
+        self.inputs = ('phi_N', 'theta_N')
+        self.outputs = ('alpha_C', 'delta_C')
 
     def evaluate(self, phi_N, theta_N, lon, lat, lon_pole):
         """
@@ -275,27 +368,32 @@ class RotateCelestial2Native(_SkyRotation):
 
     Notes
     -----
-    If ``lon``, ``lat`` and ``lon_pole`` are numerical values they should be in units of deg.
+    If ``lon``, ``lat`` and ``lon_pole`` are numerical values they should be
+    in units of deg. Inputs are angles on the celestial sphere.
+    Outputs are angles on the native sphere.
     """
-
-    #: Inputs are angles on the celestial sphere
-    inputs = ('alpha_C', 'delta_C')
-
-    #: Outputs are angles on the native sphere
-    outputs = ('phi_N', 'theta_N')
+    n_inputs = 2
+    n_outputs = 2
 
     @property
     def input_units(self):
         """ Input units. """
-        return {'alpha_C': u.deg, 'delta_C': u.deg}
+        return {self.inputs[0]: u.deg,
+                self.inputs[1]: u.deg}
 
     @property
     def return_units(self):
         """ Output units. """
-        return {'phi_N': u.deg, 'theta_N': u.deg}
+        return {self.outputs[0]: u.deg,
+                self.outputs[1]: u.deg}
 
     def __init__(self, lon, lat, lon_pole, **kwargs):
         super().__init__(lon, lat, lon_pole, **kwargs)
+
+        # Inputs are angles on the celestial sphere
+        self.inputs = ('alpha_C', 'delta_C')
+        # Outputs are angles on the native sphere
+        self.outputs = ('phi_N', 'theta_N')
 
     def evaluate(self, alpha_C, delta_C, lon, lat, lon_pole):
         """
@@ -340,12 +438,17 @@ class Rotation2D(Model):
     angle : float or `~astropy.units.Quantity`
         Angle of rotation (if float it should be in deg).
     """
+    n_inputs = 2
+    n_outputs = 2
 
-    inputs = ('x', 'y')
-    outputs = ('x', 'y')
     _separable = False
 
     angle = Parameter(default=0.0, getter=_to_orig_unit, setter=_to_radian)
+
+    def __init__(self, angle=angle, **kwargs):
+        super().__init__(angle=angle, **kwargs)
+        self._inputs = ("x", "y")
+        self._outputs = ("x", "y")
 
     @property
     def inverse(self):
@@ -360,7 +463,7 @@ class Rotation2D(Model):
 
         Parameters
         ----------
-        x, y : ndarray-like
+        x, y : array_like
             Input quantities
         angle : float (deg) or `~astropy.units.Quantity`
             Angle of rotations.
@@ -392,8 +495,7 @@ class Rotation2D(Model):
         x.shape = y.shape = orig_shape
         if has_units:
             return u.Quantity(x, unit=x_unit), u.Quantity(y, unit=y_unit)
-        else:
-            return x, y
+        return x, y
 
     @staticmethod
     def _compute_matrix(angle):

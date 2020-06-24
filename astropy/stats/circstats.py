@@ -15,7 +15,7 @@ from astropy.units import Quantity
 
 __all__ = ['circmean', 'circvar', 'circmoment', 'circcorrcoef', 'rayleightest',
            'vtest', 'vonmisesmle']
-__doctest_requires__ = {'vtest': ['scipy.stats']}
+__doctest_requires__ = {'vtest': ['scipy']}
 
 
 def _components(data, p=1, phi=0.0, axis=None, weights=None):
@@ -160,7 +160,7 @@ def circmoment(data, p=1.0, centered=False, axis=None, weights=None):
         radians whenever ``data`` is ``numpy.ndarray``.
     p : float, optional
         Order of the circular moment.
-    centered : Boolean, optional
+    centered : bool, optional
         If ``True``, central circular moments are computed. Default value is
         ``False``.
     axis : int, optional

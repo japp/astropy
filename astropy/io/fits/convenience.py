@@ -54,7 +54,7 @@ explanation of all the different formats.
     around a single format and officially deprecate the other formats.
 """
 
-
+import pathlib
 import operator
 import os
 import warnings
@@ -72,6 +72,11 @@ from .util import fileobj_closed, fileobj_name, fileobj_mode, _is_int
 from astropy.utils.exceptions import AstropyUserWarning
 from astropy.utils.decorators import deprecated_renamed_argument
 
+try:
+    from dask.array import Array as DaskArray
+except ImportError:
+    class DaskArray:
+        pass
 
 __all__ = ['getheader', 'getdata', 'getval', 'setval', 'delval', 'writeto',
            'append', 'update', 'info', 'tabledump', 'tableload',
@@ -460,8 +465,8 @@ def table_to_hdu(table, character_as_bytes=False):
         unsupported_cols = table.columns.not_isinstance((BaseColumn, Quantity, Time))
         if unsupported_cols:
             unsupported_names = [col.info.name for col in unsupported_cols]
-            raise ValueError('cannot write table with mixin column(s) {}'
-                         .format(unsupported_names))
+            raise ValueError(f'cannot write table with mixin column(s) '
+                             f'{unsupported_names}')
 
         time_cols = table.columns.isinstance(Time)
         if time_cols:
@@ -519,14 +524,31 @@ def table_to_hdu(table, character_as_bytes=False):
             except UnitScaleError:
                 scale = unit.scale
                 raise UnitScaleError(
-                    "The column '{}' could not be stored in FITS format "
-                    "because it has a scale '({})' that "
-                    "is not recognized by the FITS standard. Either scale "
-                    "the data or change the units.".format(col.name, str(scale)))
+                    f"The column '{col.name}' could not be stored in FITS "
+                    f"format because it has a scale '({str(scale)})' that "
+                    f"is not recognized by the FITS standard. Either scale "
+                    f"the data or change the units.")
             except ValueError:
-                warnings.warn(
-                    "The unit '{}' could not be saved to FITS format".format(
-                        unit.to_string()), AstropyUserWarning)
+                # Warn that the unit is lost, but let the details depend on
+                # whether the column was serialized (because it was a
+                # quantity), since then the unit can be recovered by astropy.
+                warning = (
+                    f"The unit '{unit.to_string()}' could not be saved in "
+                    f"native FITS format ")
+                if any('SerializedColumn' in item and 'name: '+col.name in item
+                       for item in table.meta.get('comments', [])):
+                    warning += (
+                        "and hence will be lost to non-astropy fits readers. "
+                        "Within astropy, the unit can roundtrip using QTable, "
+                        "though one has to enable the unit before reading.")
+                else:
+                    warning += (
+                        "and cannot be recovered in reading. If pyyaml is "
+                        "installed, it can roundtrip within astropy by "
+                        "using QTable both to write and read back, "
+                        "though one has to enable the unit before reading.")
+                warnings.warn(warning, AstropyUserWarning)
+
             else:
                 # Try creating a Unit to issue a warning if the unit is not
                 # FITS compliant
@@ -547,8 +569,9 @@ def table_to_hdu(table, character_as_bytes=False):
     for key, value in table.meta.items():
         if is_column_keyword(key.upper()) or key.upper() in REMOVE_KEYWORDS:
             warnings.warn(
-                "Meta-data keyword {} will be ignored since it conflicts "
-                "with a FITS reserved keyword".format(key), AstropyUserWarning)
+                f"Meta-data keyword {key} will be ignored since it conflicts "
+                f"with a FITS reserved keyword", AstropyUserWarning)
+            continue
 
         # Convert to FITS format
         if key == 'comments':
@@ -560,17 +583,15 @@ def table_to_hdu(table, character_as_bytes=False):
                     table_hdu.header.append((key, item))
                 except ValueError:
                     warnings.warn(
-                        "Attribute `{}` of type {} cannot be added to "
-                        "FITS Header - skipping".format(key, type(value)),
-                        AstropyUserWarning)
+                        f"Attribute `{key}` of type {type(value)} cannot be "
+                        f"added to FITS Header - skipping", AstropyUserWarning)
         else:
             try:
                 table_hdu.header[key] = value
             except ValueError:
                 warnings.warn(
-                    "Attribute `{}` of type {} cannot be added to FITS "
-                    "Header - skipping".format(key, type(value)),
-                    AstropyUserWarning)
+                    f"Attribute `{key}` of type {type(value)} cannot be "
+                    f"added to FITS Header - skipping", AstropyUserWarning)
     return table_hdu
 
 
@@ -1045,7 +1066,7 @@ def _makehdu(data, header):
         if ((isinstance(data, np.ndarray) and data.dtype.fields is not None) or
                 isinstance(data, np.recarray)):
             hdu = BinTableHDU(data, header=header)
-        elif isinstance(data, np.ndarray):
+        elif isinstance(data, (np.ndarray, DaskArray)):
             hdu = ImageHDU(data, header=header)
         else:
             raise KeyError('Data must be a numpy array.')
@@ -1053,6 +1074,8 @@ def _makehdu(data, header):
 
 
 def _stat_filename_or_fileobj(filename):
+    if isinstance(filename, pathlib.Path):
+        filename = str(filename)
     closed = fileobj_closed(filename)
     name = fileobj_name(filename) or ''
 
@@ -1064,7 +1087,7 @@ def _stat_filename_or_fileobj(filename):
     noexist_or_empty = ((name and
                          (not os.path.exists(name) or
                           (os.path.getsize(name) == 0)))
-                         or (not name and loc == 0))
+                        or (not name and loc == 0))
 
     return name, closed, noexist_or_empty
 

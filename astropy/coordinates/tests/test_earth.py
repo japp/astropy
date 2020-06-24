@@ -303,8 +303,8 @@ def test_of_address(google_api_key):
         loc = EarthLocation.of_address("New York, NY")
     except NameResolveError as e:
         # API limit might surface even here in Travis CI.
-        if 'unknown failure with' not in str(e.value):
-            pytest.xfail(str(e.value))
+        if 'unknown failure with' not in str(e):
+            pytest.xfail(str(e))
     else:
         assert quantity_allclose(loc.lat, NYC_lat, atol=NYC_tol)
         assert quantity_allclose(loc.lon, NYC_lon, atol=NYC_tol)
@@ -396,3 +396,11 @@ def test_gravitational_redshift():
                   'moon': 1*u.km,  # wrong units!
                   'earth': constants.G*constants.M_earth}
         someloc.gravitational_redshift(sometime, masses=masses)
+
+
+def test_read_only_input():
+    lon = np.array([80., 440.]) * u.deg
+    lat = np.array([45.]) * u.deg
+    lon.flags.writeable = lat.flags.writeable = False
+    loc = EarthLocation.from_geodetic(lon=lon, lat=lat)
+    assert quantity_allclose(loc[1].x, loc[0].x)

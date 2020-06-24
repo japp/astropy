@@ -112,7 +112,7 @@ class HeaderFormatter:
             Keywords for which the value(s) should be returned.
             If not specified, then the entire header is returned.
 
-        compressed : boolean, optional
+        compressed : bool, optional
             If True, shows the header describing the compression, rather than
             the header obtained after decompression. (Affects FITS files
             containing `CompImageHDU` extensions only.)
@@ -177,7 +177,7 @@ class HeaderFormatter:
         keywords : list of str, optional
             Keywords for which the cards should be returned.
 
-        compressed : boolean, optional
+        compressed : bool, optional
             If True, shows the header describing the compression.
 
         Raises
@@ -194,8 +194,7 @@ class HeaderFormatter:
             else:
                 header = self._hdulist[hdukey].header
         except (IndexError, KeyError):
-            message = '{}: Extension {} not found.'.format(self.filename,
-                                                             hdukey)
+            message = '{}: Extension {} not found.'.format(self.filename, hdukey)
             if self.verbose:
                 log.warning(message)
             raise ExtensionNotFoundException(message)
@@ -211,7 +210,7 @@ class HeaderFormatter:
                         cards.append(crd)
                     else:  # Allow for wildcard access
                         cards.extend(crd)
-                except KeyError as e:  # Keyword does not exist
+                except KeyError:  # Keyword does not exist
                     if self.verbose:
                         log.warning('{filename} (HDU {hdukey}): '
                                     'Keyword {kw} not found.'.format(
@@ -446,7 +445,7 @@ def main(args=None):
             print_headers_as_comparison(args)
         else:
             print_headers_traditional(args)
-    except OSError as e:
+    except OSError:
         # A 'Broken pipe' OSError may occur when stdout is closed prematurely,
         # eg. when calling `fitsheader file.fits | head`. We let this pass.
         pass

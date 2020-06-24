@@ -1,25 +1,22 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
+# pylint: disable=invalid-name, pointless-statement
 
-import pytest
 import pickle
-
-from copy import deepcopy
+import pytest
 
 import numpy as np
 
-from numpy.testing.utils import assert_allclose, assert_array_equal
+from numpy.testing import assert_allclose, assert_array_equal
 
 from astropy.utils import minversion
-from astropy.modeling.core import Model, ModelDefinitionError
+from astropy.modeling.core import Model, ModelDefinitionError, CompoundModel
 from astropy.modeling.parameters import Parameter
 from astropy.modeling.models import (Const1D, Shift, Scale, Rotation2D, Gaussian1D,
                                      Gaussian2D, Polynomial1D, Polynomial2D,
                                      Chebyshev2D, Legendre2D, Chebyshev1D, Legendre1D,
                                      Identity, Mapping,
-                                     Tabular1D)
+                                     Tabular1D, fix_inputs)
 import astropy.units as u
-from ..core import CompoundModel
-
 
 try:
     import scipy
@@ -53,7 +50,7 @@ def test_model_set_raises_value_error(expr, result):
        different raise a value error
     """
     with pytest.raises(ValueError):
-        s = expr(Const1D((2, 2), n_models=2), Const1D(3, n_models=1))
+        expr(Const1D((2, 2), n_models=2), Const1D(3, n_models=1))
 
 
 @pytest.mark.parametrize(('expr', 'result'),
@@ -291,9 +288,8 @@ def test_invalid_operands():
         Rotation2D(90) + Gaussian1D(1, 0, 0.1)
 
 
-@pytest.mark.parametrize('poly', [Chebyshev2D(1, 2), Polynomial2D(2), Legendre2D(1, 2),
-                                  Chebyshev1D(5), Legendre1D(5), Polynomial1D(5)])
-def test_compound_with_polynomials(poly):
+@pytest.mark.parametrize('poly', [Chebyshev2D(1, 2), Polynomial2D(2), Legendre2D(1, 2)])
+def test_compound_with_polynomials_2d(poly):
     """
     Tests that polynomials are scaled when used in compound models.
     Issue #3699
@@ -307,20 +303,84 @@ def test_compound_with_polynomials(poly):
     assert_allclose(result, result_compound)
 
 
+def test_fix_inputs():
+    g1 = Gaussian2D(1, 0, 0, 1, 2)
+    g2 = Gaussian2D(1.5, .5, -.2, .5, .3)
+    sg1_1 = fix_inputs(g1, {1: 0})
+    assert_allclose(sg1_1(0), g1(0, 0))
+    assert_allclose(sg1_1([0, 1, 3]), g1([0, 1, 3], [0, 0, 0]))
+    sg1_2 = fix_inputs(g1, {'x': 1})
+    assert_allclose(sg1_2(1.5), g1(1, 1.5))
+    gg1 = g1 & g2
+    sgg1_1 = fix_inputs(gg1, {1: 0.1, 3: 0.2})
+    assert_allclose(sgg1_1(0, 0), gg1(0, 0.1, 0, 0.2))
+    sgg1_2 = fix_inputs(gg1, {'x0': -.1, 2: .1})
+    assert_allclose(sgg1_2(1, 1), gg1(-0.1, 1, 0.1, 1))
+    assert_allclose(sgg1_2(y0=1, y1=1), gg1(-0.1, 1, 0.1, 1))
+
+
+def test_fix_inputs_invalid():
+    g1 = Gaussian2D(1, 0, 0, 1, 2)
+    with pytest.raises(ValueError):
+        fix_inputs(g1, {'x0': 0, 0: 0})
+
+    with pytest.raises(ValueError):
+        fix_inputs(g1, (0, 1))
+
+    with pytest.raises(ValueError):
+        fix_inputs(g1, {3: 2})
+
+    with pytest.raises(ValueError):
+        fix_inputs(g1, {'w': 2})
+
+    with pytest.raises(ModelDefinitionError):
+        CompoundModel('#', g1, g1)
+
+    with pytest.raises(ValueError):
+        gg1 = fix_inputs(g1, {0: 1})
+        gg1(2, y=2)
+
+
+def test_fix_inputs_with_bounding_box():
+    g1 = Gaussian2D(1, 0, 0, 1, 1)
+    g2 = Gaussian2D(1, 0, 0, 1, 1)
+    assert g1.bounding_box == ((-5.5, 5.5), (-5.5, 5.5))
+
+    gg1 = g1 & g2
+    gg1.bounding_box = ((-5.5, 5.5), (-5.4, 5.4), (-5.3, 5.3), (-5.2, 5.2))
+    assert gg1.bounding_box == ((-5.5, 5.5), (-5.4, 5.4), (-5.3, 5.3), (-5.2, 5.2))
+
+    sg = fix_inputs(gg1, {0: 0, 2: 0})
+    assert sg.bounding_box == ((-5.4, 5.4), (-5.2, 5.2))
+
+    g1 = Gaussian1D(10, 3, 1)
+    g = g1 & g1
+    g.bounding_box = ((1, 4), (6, 8))
+    gf = fix_inputs(g, {0: 1})
+    assert gf.bounding_box == (6, 8)
+
+
 def test_indexing_on_instance():
     """Test indexing on compound model instances."""
 
     m = Gaussian1D(1, 0, 0.1) + Const1D(2)
     assert isinstance(m[0], Gaussian1D)
     assert isinstance(m[1], Const1D)
-    # assert isinstance(m['Gaussian1D'], Gaussian1D)
-    # assert isinstance(m['Const1D'], Const1D)
+    assert m.param_names == ('amplitude_0', 'mean_0', 'stddev_0', 'amplitude_1')
 
     # Test parameter equivalence
-    assert m[0].amplitude == 1
-    assert m[0].mean == 0
-    assert m[0].stddev == 0.1
-    assert m[1].amplitude == 2
+    assert m[0].amplitude == 1 == m.amplitude_0
+    assert m[0].mean == 0 == m.mean_0
+    assert m[0].stddev == 0.1 == m.stddev_0
+    assert m[1].amplitude == 2 == m.amplitude_1
+
+    # Test that parameter value updates are symmetric between the compound
+    # model and the submodel returned by indexing
+    const = m[1]
+    m.amplitude_1 = 42
+    assert const.amplitude == 42
+    const.amplitude = 137
+    assert m.amplitude_1 == 137
 
     # Similar couple of tests, but now where the compound model was created
     # from model instances
@@ -332,6 +392,12 @@ def test_indexing_on_instance():
     assert m['g'].name == 'g'
     assert m['p'].name == 'p'
 
+    poly = m[1]
+    m.c0_1 = 12345
+    assert poly.c0 == 12345
+    poly.c1 = 6789
+    assert m.c1_1 == 6789
+
     # Test negative indexing
     assert isinstance(m[-1], Polynomial1D)
     assert isinstance(m[-2], Gaussian1D)
@@ -341,6 +407,11 @@ def test_indexing_on_instance():
 
     with pytest.raises(IndexError):
         m['foobar']
+
+    # Confirm index-by-name works with fix_inputs
+    g = Gaussian2D(1, 2, 3, 4, 5, name='g')
+    m = fix_inputs(g, {0: 1})
+    assert m['g'].name == 'g'
 
     # Test string slicing
     A = Const1D(1.1, name='A')
@@ -376,11 +447,7 @@ def test_inherit_constraints():
     """
     model = (Gaussian1D(bounds={'stddev': (0, 0.3)}, fixed={'mean': True}) +
              Gaussian1D(fixed={'mean': True}))
-    # We have to copy the model before modifying it, otherwise the test fails
-    # if it is run twice in a row, because the state of the model instance
-    # would be preserved from one run to the next.
-    model = deepcopy(model)
-    model.map_parameters()
+
     # Lots of assertions in this test as there are multiple interfaces to
     # parameter constraints
 
@@ -450,7 +517,6 @@ def test_pickle_compound():
     g1 = Gaussian1D(1.0, 0.0, 0.1)
     g2 = Gaussian1D([2.0, 3.0], [0.0, 0.0], [0.2, 0.3])
     m = g1 + g2
-    m.map_parameters()
     m2 = pickle.loads(pickle.dumps(m))
     assert m.param_names == m2.param_names
     assert m.__class__.__name__ == m2.__class__.__name__
@@ -462,16 +528,15 @@ def test_update_parameters():
     offx = Shift(1)
     scl = Scale(2)
     m = offx | scl
-    m.map_parameters()
-    assert(m(1) == 4)
+    assert m(1) == 4
 
     offx.offset = 42
-    assert(m(1) == 86)
+    assert m(1) == 86
 
     m.factor_1 = 100
-    assert(m(1) == 4300)
+    assert m(1) == 4300
     m2 = m | offx
-    assert(m2(1) == 4342)
+    assert m2(1) == 4342
 
 
 def test_name():
@@ -551,8 +616,8 @@ def test_bounding_box():
     mask = ~np.isnan(val)
     assert_allclose(val[mask], compare[mask])
     val2 = g(x+2, y+2, with_bounding_box=True)
-    assert(np.isnan(val2).sum() == 100)
-    val3 = g(.1, .1, with_bounding_box=True)
+    assert np.isnan(val2).sum() == 100
+    # val3 = g(.1, .1, with_bounding_box=True)
 
 
 @pytest.mark.skipif("not HAS_SCIPY_14")
@@ -561,4 +626,87 @@ def test_bounding_box_with_units():
     lt = np.arange(5) * u.AA
     t = Tabular1D(points, lt)
 
-    assert(t(1 * u.pix, with_bounding_box=True) == 1. * u.AA)
+    assert t(1 * u.pix, with_bounding_box=True) == 1. * u.AA
+
+
+@pytest.mark.parametrize('poly', [Chebyshev1D(5), Legendre1D(5), Polynomial1D(5)])
+def test_compound_with_polynomials_1d(poly):
+    """
+    Tests that polynomials are offset when used in compound models.
+    Issue #3699
+    """
+    poly.parameters = [1, 2, 3, 4, 1, 2]
+    shift = Shift(3)
+    model = poly | shift
+    x = np.linspace(-5, 5, 10)
+    result_compound = model(x)
+    result = shift(poly(x))
+    assert_allclose(result, result_compound)
+    assert model.param_names == ('c0_0', 'c1_0', 'c2_0', 'c3_0', 'c4_0', 'c5_0', 'offset_1')
+
+
+def test_replace_submodel():
+    """
+    Replace a model in a Compound model
+    """
+    S1 = Shift(2, name='shift2') | Scale(3, name='scale3')  # First shift then scale
+    S2 = Scale(2, name='scale2') | Shift(3, name='shift3')  # First scale then shift
+
+    m = S1 & S2
+    assert m(1, 2) == (9, 7)
+
+    m2 = m.replace_submodel('scale3', Scale(4, name='scale4'))
+    assert m2(1, 2) == (12, 7)
+    assert m(1, 2) == (9, 7)
+    # Check the inverse has been updated
+    assert m2.inverse(12, 7) == (1, 2)
+
+    # Produce the same result by replacing a single model with a compound
+    m3 = m.replace_submodel('shift2', Shift(2) | Scale(2))
+    assert m(1, 2) == (9, 7)
+    assert m3(1, 2) == (18, 7)
+    # Check the inverse has been updated
+    assert m3.inverse(18, 7) == (1, 2)
+
+    # Test with arithmetic model compunding operator
+    m = S1 + S2
+    assert m(1) == 14
+    m2 = m.replace_submodel('scale2', Scale(4, name='scale4'))
+    assert m2(1) == 16
+
+    # Test with fix_inputs()
+    R = fix_inputs(Rotation2D(angle=90, name='rotate'), {0: 1})
+    m4 = S1 | R
+    assert_allclose(m4(0), (-6, 1))
+
+    m5 = m4.replace_submodel('rotate', Rotation2D(180))
+    assert_allclose(m5(0), (-1, -6))
+
+    # Check we get a value error when model name doesn't exist
+    with pytest.raises(ValueError):
+        m2 = m.replace_submodel('not_there', Scale(2))
+
+    # And now a model set
+    P = Polynomial1D(degree=1, n_models=2, name='poly')
+    S = Shift([1, 2], n_models=2)
+    m = P | S
+    assert_array_equal(m([0, 1]), (1, 2))
+    with pytest.raises(ValueError):
+        m2 = m.replace_submodel('poly', Polynomial1D(degree=1, c0=1))
+    m2 = m.replace_submodel('poly', Polynomial1D(degree=1, c0=[1, 2],
+                                                 n_models=2))
+    assert_array_equal(m2([0, 1]), (2, 4))
+
+    # Ensure previous _user_inverse doesn't stick around
+    S1 = Shift(1)
+    S2 = Shift(2)
+    S3 = Shift(3, name='S3')
+
+    S23 = S2 | S3
+    S23.inverse = Shift(-4.9)
+    m = S1 & S23
+
+    # This should delete the S23._user_inverse
+    m2 = m.replace_submodel('S3', Shift(4))
+    assert m2(1, 2) == (2, 8)
+    assert m2.inverse(2, 8) == (1, 2)

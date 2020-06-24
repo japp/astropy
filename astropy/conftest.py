@@ -7,8 +7,15 @@ making use of astropy's test runner).
 import os
 import builtins
 import tempfile
+import warnings
 
-from astropy.tests.plugins.display import PYTEST_HEADER_MODULES
+try:
+    from pytest_astropy_header.display import PYTEST_HEADER_MODULES
+except ImportError:
+    PYTEST_HEADER_MODULES = {}
+
+import pytest
+
 from astropy.tests.helper import enable_deprecations_as_exceptions
 
 try:
@@ -31,12 +38,28 @@ if HAS_MATPLOTLIB:
 matplotlibrc_cache = {}
 
 
+@pytest.fixture
+def ignore_matplotlibrc():
+    # This is a fixture for tests that use matplotlib but not pytest-mpl
+    # (which already handles rcParams)
+    from matplotlib import pyplot as plt
+    with plt.style.context({}, after_reset=True):
+        yield
+
+
 def pytest_configure(config):
+    from astropy.utils.iers import conf as iers_conf
+
+    # Disable IERS auto download for testing
+    iers_conf.auto_download = False
+
     builtins._pytest_running = True
     # do not assign to matplotlibrc_cache in function scope
     if HAS_MATPLOTLIB:
-        matplotlibrc_cache.update(matplotlib.rcParams)
-        matplotlib.rcdefaults()
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            matplotlibrc_cache.update(matplotlib.rcParams)
+            matplotlib.rcdefaults()
 
     # Make sure we use temporary directories for the config and cache
     # so that the tests are insensitive to local configuration. Note that this
@@ -52,13 +75,26 @@ def pytest_configure(config):
     os.mkdir(os.path.join(os.environ['XDG_CONFIG_HOME'], 'astropy'))
     os.mkdir(os.path.join(os.environ['XDG_CACHE_HOME'], 'astropy'))
 
+    config.option.astropy_header = True
+
+    PYTEST_HEADER_MODULES['Cython'] = 'cython'
+    PYTEST_HEADER_MODULES['Scikit-image'] = 'skimage'
+    PYTEST_HEADER_MODULES['asdf'] = 'asdf'
+
 
 def pytest_unconfigure(config):
+    from astropy.utils.iers import conf as iers_conf
+
+    # Undo IERS auto download setting for testing
+    iers_conf.reset('auto_download')
+
     builtins._pytest_running = False
     # do not assign to matplotlibrc_cache in function scope
     if HAS_MATPLOTLIB:
-        matplotlib.rcParams.update(matplotlibrc_cache)
-        matplotlibrc_cache.clear()
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            matplotlib.rcParams.update(matplotlibrc_cache)
+            matplotlibrc_cache.clear()
 
     if builtins._xdg_config_home_orig is None:
         os.environ.pop('XDG_CONFIG_HOME')
@@ -71,6 +107,24 @@ def pytest_unconfigure(config):
         os.environ['XDG_CACHE_HOME'] = builtins._xdg_cache_home_orig
 
 
-PYTEST_HEADER_MODULES['Cython'] = 'cython'
-PYTEST_HEADER_MODULES['Scikit-image'] = 'skimage'
-PYTEST_HEADER_MODULES['asdf'] = 'asdf'
+def pytest_terminal_summary(terminalreporter):
+    """Output a warning to IPython users in case any tests failed."""
+
+    try:
+        get_ipython()
+    except NameError:
+        return
+
+    if not terminalreporter.stats.get('failed'):
+        # Only issue the warning when there are actually failures
+        return
+
+    terminalreporter.ensure_newline()
+    terminalreporter.write_line(
+        'Some tests are known to fail when run from the IPython prompt; '
+        'especially, but not limited to tests involving logging and warning '
+        'handling.  Unless you are certain as to the cause of the failure, '
+        'please check that the failure occurs outside IPython as well.  See '
+        'http://docs.astropy.org/en/stable/known_issues.html#failing-logging-'
+        'tests-when-running-the-tests-in-ipython for more information.',
+        yellow=True, bold=True)

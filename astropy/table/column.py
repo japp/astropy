@@ -2,21 +2,11 @@
 
 import warnings
 import weakref
-import re
 
 from copy import deepcopy
 
 import numpy as np
 from numpy import ma
-
-# Remove this when Numpy no longer emits this warning and that Numpy version
-# becomes the minimum required version for Astropy.
-# https://github.com/astropy/astropy/issues/6285
-try:
-    from numpy.ma.core import MaskedArrayFutureWarning
-except ImportError:
-    # For Numpy versions that do not raise this warning.
-    MaskedArrayFutureWarning = None
 
 from astropy.units import Unit, Quantity
 from astropy.utils.console import color_print
@@ -134,6 +124,38 @@ class FalseArray(np.ndarray):
                              .format(self.__class__.__name__))
 
 
+def _expand_string_array_for_values(arr, values):
+    """
+    For string-dtype return a version of ``arr`` that is wide enough for ``values``.
+    If ``arr`` is not string-dtype or does not need expansion then return ``arr``.
+
+    Parameters
+    ----------
+    arr : np.ndarray
+        Input array
+    values : scalar or array_like
+        Values for width comparison for string arrays
+
+    Returns
+    -------
+    arr_expanded : np.ndarray
+
+    """
+    if arr.dtype.kind in ('U', 'S') and values is not np.ma.masked:
+        # Find the length of the longest string in the new values.
+        values_str_len = np.char.str_len(values).max()
+
+        # Determine character repeat count of arr.dtype.  Returns a positive
+        # int or None (something like 'U0' is not possible in numpy).  If new values
+        # are longer than current then make a new (wider) version of arr.
+        arr_str_len = dtype_bytes_or_chars(arr.dtype)
+        if arr_str_len and values_str_len > arr_str_len:
+            arr_dtype = arr.dtype.byteorder + arr.dtype.kind + str(values_str_len)
+            arr = arr.astype(arr_dtype)
+
+    return arr
+
+
 class ColumnInfo(BaseColumnInfo):
     """
     Container for meta information like name, description, format.
@@ -173,6 +195,19 @@ class ColumnInfo(BaseColumnInfo):
                                            ('meta', 'unit', 'format', 'description'))
 
         return self._parent_cls(length=length, **attrs)
+
+    def get_sortable_arrays(self):
+        """
+        Return a list of arrays which can be lexically sorted to represent
+        the order of the parent column.
+
+        For Column this is just the column itself.
+
+        Returns
+        -------
+        arrays : list of ndarray
+        """
+        return [self._parent]
 
 
 class BaseColumn(_ColumnGetitemShim, np.ndarray):
@@ -386,9 +421,10 @@ class BaseColumn(_ColumnGetitemShim, np.ndarray):
            (see #1446 and #1685)
         """
         out_arr = super().__array_wrap__(out_arr, context)
-        if (self.shape != out_arr.shape or
-            (isinstance(out_arr, BaseColumn) and
-             (context is not None and context[0] in _comparison_functions))):
+        if (self.shape != out_arr.shape
+            or (isinstance(out_arr, BaseColumn)
+                and (context is not None
+                     and context[0] in _comparison_functions))):
             return out_arr.data[()]
         else:
             return out_arr
@@ -475,7 +511,7 @@ class BaseColumn(_ColumnGetitemShim, np.ndarray):
 
         Returns
         -------
-        equal : boolean
+        equal : bool
             True if all attributes are equal
         """
         if not isinstance(col, BaseColumn):
@@ -972,8 +1008,8 @@ class Column(BaseColumn):
             # attention of future maintainers to check (by deleting or versioning
             # the if block below).  See #6899 discussion.
             # 2019-06-21: still needed with numpy 1.16.
-            if (isinstance(self, MaskedColumn) and self.dtype.kind == 'U' and
-                    isinstance(other, MaskedColumn) and other.dtype.kind == 'S'):
+            if (isinstance(self, MaskedColumn) and self.dtype.kind == 'U'
+                    and isinstance(other, MaskedColumn) and other.dtype.kind == 'S'):
                 self, other = other, self
                 op = swapped_oper
 
@@ -1005,9 +1041,9 @@ class Column(BaseColumn):
             Object that defines the index or indices before which ``values`` is
             inserted.
         values : array_like
-            Value(s) to insert.  If the type of ``values`` is different
-            from that of quantity, ``values`` is converted to the matching type.
-            ``values`` should be shaped so that it can be broadcast appropriately
+            Value(s) to insert.  If the type of ``values`` is different from
+            that of the column, ``values`` is converted to the matching type.
+            ``values`` should be shaped so that it can be broadcast appropriately.
         axis : int, optional
             Axis along which to insert ``values``.  If ``axis`` is None then
             the column array is flattened before insertion.  Default is 0,
@@ -1026,10 +1062,9 @@ class Column(BaseColumn):
             data = np.insert(self, obj, None, axis=axis)
             data[obj] = values
         else:
-            # Explicitly convert to dtype of this column.  Needed because numpy 1.7
-            # enforces safe casting by default, so .  This isn't the case for 1.6 or 1.8+.
-            values = np.asarray(values, dtype=self.dtype)
-            data = np.insert(self, obj, values, axis=axis)
+            self_for_insert = _expand_string_array_for_values(self, values)
+            data = np.insert(self_for_insert, obj, values, axis=axis)
+
         out = data.view(self.__class__)
         out.__array_finalize__(self)
         return out
@@ -1092,23 +1127,18 @@ class MaskedColumnInfo(ColumnInfo):
         method = self.serialize_method[self._serialize_context]
 
         if method == 'data_mask':
-            # Note that adding to _represent_as_dict_attrs triggers later code which
-            # will add this to the '__serialized_columns__' meta YAML dict.
-
-            # Note also one driver here is a performance issue in #8443 where repr() of a
+            # Note: a driver here is a performance issue in #8443 where repr() of a
             # np.ma.MaskedArray value is up to 10 times slower than repr of a normal array
             # value.  So regardless of whether there are masked elements it is useful to
             # explicitly define this as a serialized column and use col.data.data (ndarray)
             # instead of letting it fall through to the "standard" serialization machinery.
             out['data'] = col.data.data
-            self._represent_as_dict_attrs += ('data',)
 
             if np.any(col.mask):
                 # Only if there are actually masked elements do we add the ``mask`` column
                 out['mask'] = col.mask
-                self._represent_as_dict_attrs += ('mask',)
 
-        elif method is 'null_value':
+        elif method == 'null_value':
             pass
 
         else:
@@ -1232,7 +1262,7 @@ class MaskedColumn(Column, _MaskedColumnGetitemShim, ma.MaskedArray):
         if fill_value is None and getattr(data, 'fill_value', None) is not None:
             # Coerce the fill_value to the correct type since `data` may be a
             # different dtype than self.
-            fill_value = self.dtype.type(data.fill_value)
+            fill_value = np.array(data.fill_value, self.dtype)[()]
         self.fill_value = fill_value
 
         self.parent_table = None
@@ -1319,11 +1349,12 @@ class MaskedColumn(Column, _MaskedColumnGetitemShim, ma.MaskedArray):
             Object that defines the index or indices before which ``values`` is
             inserted.
         values : array_like
-            Value(s) to insert.  If the type of ``values`` is different
-            from that of quantity, ``values`` is converted to the matching type.
-            ``values`` should be shaped so that it can be broadcast appropriately
-        mask : boolean array_like
-            Mask value(s) to insert.  If not supplied then False is used.
+            Value(s) to insert.  If the type of ``values`` is different from
+            that of the column, ``values`` is converted to the matching type.
+            ``values`` should be shaped so that it can be broadcast appropriately.
+        mask : bool or array_like
+            Mask value(s) to insert.  If not supplied, and values does not have
+            a mask either, then False is used.
         axis : int, optional
             Axis along which to insert ``values``.  If ``axis`` is None then
             the column array is flattened before insertion.  Default is 0,
@@ -1344,16 +1375,17 @@ class MaskedColumn(Column, _MaskedColumnGetitemShim, ma.MaskedArray):
             new_data = np.insert(self_ma.data, obj, None, axis=axis)
             new_data[obj] = values
         else:
-            # Explicitly convert to dtype of this column.  Needed because numpy 1.7
-            # enforces safe casting by default, so .  This isn't the case for 1.6 or 1.8+.
-            values = np.asarray(values, dtype=self.dtype)
+            self_ma = _expand_string_array_for_values(self_ma, values)
             new_data = np.insert(self_ma.data, obj, values, axis=axis)
 
         if mask is None:
-            if self.dtype.kind == 'O':
-                mask = False
-            else:
-                mask = np.zeros(values.shape, dtype=bool)
+            mask = getattr(values, 'mask', np.ma.nomask)
+            if mask is np.ma.nomask:
+                if self.dtype.kind == 'O':
+                    mask = False
+                else:
+                    mask = np.zeros(np.shape(values), dtype=bool)
+
         new_mask = np.insert(self_ma.mask, obj, mask, axis=axis)
         new_ma = np.ma.array(new_data, mask=new_mask, copy=False)
 
@@ -1394,15 +1426,7 @@ class MaskedColumn(Column, _MaskedColumnGetitemShim, ma.MaskedArray):
         # update indices
         self.info.adjust_indices(index, value, len(self))
 
-        # Remove this when Numpy no longer emits this warning and that
-        # Numpy version becomes the minimum required version for Astropy.
-        # https://github.com/astropy/astropy/issues/6285
-        if MaskedArrayFutureWarning is None:
-            ma.MaskedArray.__setitem__(self, index, value)
-        else:
-            with warnings.catch_warnings():
-                warnings.simplefilter('ignore', MaskedArrayFutureWarning)
-                ma.MaskedArray.__setitem__(self, index, value)
+        ma.MaskedArray.__setitem__(self, index, value)
 
     # We do this to make the methods show up in the API docs
     name = BaseColumn.name

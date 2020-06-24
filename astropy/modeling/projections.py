@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 # -*- coding: utf-8 -*-
-
+# pylint: disable=invalid-name
 """
 Implements projections--particularly sky projections defined in WCS Paper II
 [1]_.
@@ -18,11 +18,10 @@ import abc
 
 import numpy as np
 
-from .core import Model
-from .parameters import Parameter, InputParameterError
-
 from astropy import units as u
 
+from .core import Model
+from .parameters import Parameter, InputParameterError
 from . import _projections
 from .utils import _to_radian, _to_orig_unit
 
@@ -96,7 +95,7 @@ __all__ = ['Projection', 'Pix2SkyProjection', 'Sky2PixProjection',
            'Pix2Sky_QSC', 'Sky2Pix_QSC',
            'Pix2Sky_HPX', 'Sky2Pix_HPX',
            'Pix2Sky_XPH', 'Sky2Pix_XPH'
-]
+           ]
 
 
 class Projection(Model):
@@ -119,37 +118,51 @@ class Projection(Model):
 class Pix2SkyProjection(Projection):
     """Base class for all Pix2Sky projections."""
 
-    inputs = ('x', 'y')
-    outputs = ('phi', 'theta')
+    n_inputs = 2
+    n_outputs = 2
 
     _input_units_strict = True
     _input_units_allow_dimensionless = True
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.inputs = ('x', 'y')
+        self.outputs = ('phi', 'theta')
+
     @property
     def input_units(self):
-        return {'x': u.deg, 'y': u.deg}
+        return {self.inputs[0]: u.deg,
+                self.inputs[1]: u.deg}
 
     @property
     def return_units(self):
-        return {'phi': u.deg, 'theta': u.deg}
+        return {self.outputs[0]: u.deg,
+                self.outputs[1]: u.deg}
 
 
 class Sky2PixProjection(Projection):
     """Base class for all Sky2Pix projections."""
 
-    inputs = ('phi', 'theta')
-    outputs = ('x', 'y')
+    n_inputs = 2
+    n_outputs = 2
 
     _input_units_strict = True
     _input_units_allow_dimensionless = True
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.inputs = ('phi', 'theta')
+        self.outputs = ('x', 'y')
+
     @property
     def input_units(self):
-        return {'phi': u.deg, 'theta': u.deg}
+        return {self.inputs[0]: u.deg,
+                self.inputs[1]: u.deg}
 
     @property
     def return_units(self):
-        return {'x': u.deg, 'y': u.deg}
+        return {self.outputs[0]: u.deg,
+                self.outputs[1]: u.deg}
 
 
 class Zenithal(Projection):
@@ -208,7 +221,6 @@ class Pix2Sky_ZenithalPerspective(Pix2SkyProjection, Zenithal):
 
     def __init__(self, mu=mu.default, gamma=gamma.default, **kwargs):
         # units : mu - in spherical radii, gamma - in deg
-        # TODO: Support quantity objects here and in similar contexts
         super().__init__(mu, gamma, **kwargs)
 
     @mu.validator
@@ -1948,8 +1960,8 @@ class AffineTransformation2D(Model):
         translation to apply to the inputs
     """
 
-    inputs = ('x', 'y')
-    outputs = ('x', 'y')
+    n_inputs = 2
+    n_outputs = 2
 
     standard_broadcasting = False
 
@@ -1979,6 +1991,11 @@ class AffineTransformation2D(Model):
             raise InputParameterError(
                 "Expected translation vector to be a 2 element row or column "
                 "vector array")
+
+    def __init__(self, matrix=matrix, translation=translation, **kwargs):
+        super().__init__(matrix=matrix, translation=translation, **kwargs)
+        self.inputs = ("x", "y")
+        self.outputs = ("x", "y")
 
     @property
     def inverse(self):
@@ -2051,18 +2068,13 @@ class AffineTransformation2D(Model):
         augmented_matrix[2] = [0, 0, 1]
         if unit is not None:
             return augmented_matrix * unit
-        else:
-            return augmented_matrix
+        return augmented_matrix
 
     @property
     def input_units(self):
         if self.translation.unit is None and self.matrix.unit is None:
             return None
         elif self.translation.unit is not None:
-            return {'x': self.translation.unit,
-                    'y': self.translation.unit
-                    }
+            return dict(zip(self.inputs, [self.translation.unit] * 2))
         else:
-            return {'x': self.matrix.unit,
-                    'y': self.matrix.unit
-                    }
+            return dict(zip(self.inputs, [self.matrix.unit] * 2))

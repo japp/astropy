@@ -1,22 +1,20 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-
 from copy import deepcopy
 import numpy as np
+import pytest
 
 from astropy import units as u
-from astropy.tests.helper import (catch_warnings, pytest,
-                             assert_quantity_allclose as assert_allclose)
+from astropy.tests.helper import (catch_warnings,
+                                  assert_quantity_allclose as assert_allclose)
 from astropy.utils import OrderedDescriptorContainer
-from astropy.utils.compat import NUMPY_LT_1_14
 from astropy.utils.exceptions import AstropyWarning
 from astropy.coordinates import representation as r
 from astropy.coordinates.representation import REPRESENTATION_CLASSES
 from astropy.units import allclose
 
-
-from .test_representation import unitphysics  # this fixture is used below
+from .test_representation import unitphysics  # this fixture is used below # noqa
 
 
 def setup_function(func):
@@ -89,6 +87,37 @@ def test_frame_subclass_attribute_descriptor():
     assert mfk4.equinox.value == 'J1980.000'
     assert mfk4.obstime.value == 'J1990.000'
     assert mfk4.newattr == 'world'
+
+
+def test_differentialattribute():
+    from astropy.coordinates import BaseCoordinateFrame
+    from astropy.coordinates.attributes import DifferentialAttribute
+
+    # Test logic of passing input through to allowed class
+    vel = [1, 2, 3]*u.km/u.s
+    dif = r.CartesianDifferential(vel)
+
+    class TestFrame(BaseCoordinateFrame):
+        attrtest = DifferentialAttribute(
+            default=dif, allowed_classes=[r.CartesianDifferential])
+
+    frame1 = TestFrame()
+    frame2 = TestFrame(attrtest=dif)
+    frame3 = TestFrame(attrtest=vel)
+
+    assert np.all(frame1.attrtest.d_xyz == frame2.attrtest.d_xyz)
+    assert np.all(frame1.attrtest.d_xyz == frame3.attrtest.d_xyz)
+
+    # This shouldn't work if there is more than one allowed class:
+    class TestFrame2(BaseCoordinateFrame):
+        attrtest = DifferentialAttribute(
+            default=dif, allowed_classes=[r.CartesianDifferential,
+                                          r.CylindricalDifferential])
+
+    frame1 = TestFrame2()
+    frame2 = TestFrame2(attrtest=dif)
+    with pytest.raises(TypeError):
+        TestFrame2(attrtest=vel)
 
 
 def test_create_data_frames():
@@ -187,27 +216,19 @@ def test_frame_repr():
     i3 = ICRS(ra=1*u.deg, dec=2*u.deg, distance=3*u.kpc)
 
     assert repr(i2) == ('<ICRS Coordinate: (ra, dec) in deg\n'
-                        '    ({})>').format(' 1.,  2.' if NUMPY_LT_1_14
-                                             else '1., 2.')
+                        '    (1., 2.)>')
     assert repr(i3) == ('<ICRS Coordinate: (ra, dec, distance) in (deg, deg, kpc)\n'
-                        '    ({})>').format(' 1.,  2.,  3.' if NUMPY_LT_1_14
-                                            else '1., 2., 3.')
+                        '    (1., 2., 3.)>')
 
     # try with arrays
     i2 = ICRS(ra=[1.1, 2.1]*u.deg, dec=[2.1, 3.1]*u.deg)
     i3 = ICRS(ra=[1.1, 2.1]*u.deg, dec=[-15.6, 17.1]*u.deg, distance=[11., 21.]*u.kpc)
 
     assert repr(i2) == ('<ICRS Coordinate: (ra, dec) in deg\n'
-                        '    [{}]>').format('( 1.1,  2.1), ( 2.1,  3.1)'
-                                            if NUMPY_LT_1_14 else
-                                            '(1.1, 2.1), (2.1, 3.1)')
+                        '    [(1.1, 2.1), (2.1, 3.1)]>')
 
-    if NUMPY_LT_1_14:
-        assert repr(i3) == ('<ICRS Coordinate: (ra, dec, distance) in (deg, deg, kpc)\n'
-                            '    [( 1.1, -15.6,  11.), ( 2.1,  17.1,  21.)]>')
-    else:
-        assert repr(i3) == ('<ICRS Coordinate: (ra, dec, distance) in (deg, deg, kpc)\n'
-                            '    [(1.1, -15.6, 11.), (2.1,  17.1, 21.)]>')
+    assert repr(i3) == ('<ICRS Coordinate: (ra, dec, distance) in (deg, deg, kpc)\n'
+                        '    [(1.1, -15.6, 11.), (2.1,  17.1, 21.)]>')
 
 
 def test_frame_repr_vels():
@@ -219,10 +240,9 @@ def test_frame_repr_vels():
     # unit comes out as mas/yr because of the preferred units defined in the
     # frame RepresentationMapping
     assert repr(i) == ('<ICRS Coordinate: (ra, dec) in deg\n'
-                       '    ({0})\n'
+                       '    (1., 2.)\n'
                        ' (pm_ra_cosdec, pm_dec) in mas / yr\n'
-                       '    ({0})>').format(' 1.,  2.' if NUMPY_LT_1_14 else
-                                            '1., 2.')
+                       '    (1., 2.)>')
 
 
 def test_converting_units():
@@ -479,6 +499,126 @@ def test_transform_to_nonscalar_nodata_frame():
     assert coo2.shape == (3, 12)
 
 
+def test_setitem_no_velocity():
+    """Test different flavors of item setting for a Frame without a velocity.
+    """
+    from astropy.coordinates.builtin_frames import FK4
+
+    obstime = 'B1955'
+    sc0 = FK4([1, 2]*u.deg, [3, 4]*u.deg, obstime=obstime)
+    sc2 = FK4([10, 20]*u.deg, [30, 40]*u.deg, obstime=obstime)
+
+    sc1 = sc0.copy()
+    sc1_repr = repr(sc1)
+    assert 'representation' in sc1.cache
+    sc1[1] = sc2[0]
+    assert sc1.cache == {}
+    assert repr(sc2) != sc1_repr
+
+    assert np.allclose(sc1.ra.to_value(u.deg), [1, 10])
+    assert np.allclose(sc1.dec.to_value(u.deg), [3, 30])
+    assert sc1.obstime == sc2.obstime
+    assert sc1.name == 'fk4'
+
+    sc1 = sc0.copy()
+    sc1[:] = sc2[0]
+    assert np.allclose(sc1.ra.to_value(u.deg), [10, 10])
+    assert np.allclose(sc1.dec.to_value(u.deg), [30, 30])
+
+    sc1 = sc0.copy()
+    sc1[:] = sc2[:]
+    assert np.allclose(sc1.ra.to_value(u.deg), [10, 20])
+    assert np.allclose(sc1.dec.to_value(u.deg), [30, 40])
+
+    sc1 = sc0.copy()
+    sc1[[1, 0]] = sc2[:]
+    assert np.allclose(sc1.ra.to_value(u.deg), [20, 10])
+    assert np.allclose(sc1.dec.to_value(u.deg), [40, 30])
+
+    # Works for array-valued obstime so long as they are considered equivalent
+    sc1 = FK4(sc0.ra, sc0.dec, obstime=[obstime, obstime])
+    sc1[0] = sc2[0]
+
+    # Multidimensional coordinates
+    sc1 = FK4([[1, 2], [3, 4]] * u.deg, [[5, 6], [7, 8]] * u.deg)
+    sc2 = FK4([[10, 20], [30, 40]] * u.deg, [[50, 60], [70, 80]] * u.deg)
+    sc1[0] = sc2[0]
+    assert np.allclose(sc1.ra.to_value(u.deg), [[10, 20], [3, 4]])
+    assert np.allclose(sc1.dec.to_value(u.deg), [[50, 60], [7, 8]])
+
+
+def test_setitem_velocities():
+    """Test different flavors of item setting for a Frame with a velocity.
+    """
+    from astropy.coordinates.builtin_frames import FK4
+
+    sc0 = FK4([1, 2]*u.deg, [3, 4]*u.deg, radial_velocity=[1, 2]*u.km/u.s,
+              obstime='B1950')
+    sc2 = FK4([10, 20]*u.deg, [30, 40]*u.deg, radial_velocity=[10, 20]*u.km/u.s,
+              obstime='B1950')
+
+    sc1 = sc0.copy()
+    sc1[1] = sc2[0]
+    assert np.allclose(sc1.ra.to_value(u.deg), [1, 10])
+    assert np.allclose(sc1.dec.to_value(u.deg), [3, 30])
+    assert np.allclose(sc1.radial_velocity.to_value(u.km / u.s), [1, 10])
+    assert sc1.obstime == sc2.obstime
+    assert sc1.name == 'fk4'
+
+    sc1 = sc0.copy()
+    sc1[:] = sc2[0]
+    assert np.allclose(sc1.ra.to_value(u.deg), [10, 10])
+    assert np.allclose(sc1.dec.to_value(u.deg), [30, 30])
+    assert np.allclose(sc1.radial_velocity.to_value(u.km / u.s), [10, 10])
+
+    sc1 = sc0.copy()
+    sc1[:] = sc2[:]
+    assert np.allclose(sc1.ra.to_value(u.deg), [10, 20])
+    assert np.allclose(sc1.dec.to_value(u.deg), [30, 40])
+    assert np.allclose(sc1.radial_velocity.to_value(u.km / u.s), [10, 20])
+
+    sc1 = sc0.copy()
+    sc1[[1, 0]] = sc2[:]
+    assert np.allclose(sc1.ra.to_value(u.deg), [20, 10])
+    assert np.allclose(sc1.dec.to_value(u.deg), [40, 30])
+    assert np.allclose(sc1.radial_velocity.to_value(u.km / u.s), [20, 10])
+
+
+def test_setitem_exceptions():
+    from astropy.coordinates.builtin_frames import FK4, Galactic
+
+    obstime = 'B1950'
+    sc0 = FK4([1, 2]*u.deg, [3, 4]*u.deg)
+    sc2 = FK4([10, 20]*u.deg, [30, 40]*u.deg, obstime=obstime)
+
+    sc1 = Galactic(sc0.ra, sc0.dec)
+    with pytest.raises(TypeError, match='can only set from object of same class: '
+                       'Galactic vs. FK4'):
+        sc1[0] = sc2[0]
+
+    sc1 = FK4(sc0.ra, sc0.dec, obstime='B2001')
+    with pytest.raises(ValueError, match='can only set frame item from an equivalent frame'):
+        sc1[0] = sc2[0]
+
+    sc1 = FK4(sc0.ra[0], sc0.dec[0], obstime=obstime)
+    with pytest.raises(TypeError, match="scalar 'FK4' frame object does not support "
+                       'item assignment'):
+        sc1[0] = sc2[0]
+
+    sc1 = FK4(obstime=obstime)
+    with pytest.raises(ValueError, match='cannot set frame which has no data'):
+        sc1[0] = sc2[0]
+
+    sc1 = FK4(sc0.ra, sc0.dec, obstime=[obstime, 'B1980'])
+    with pytest.raises(ValueError, match='can only set frame item from an equivalent frame'):
+        sc1[0] = sc2[0]
+
+    # Wrong shape
+    sc1 = FK4([sc0.ra], [sc0.dec], obstime=[obstime, 'B1980'])
+    with pytest.raises(ValueError, match='can only set frame item from an equivalent frame'):
+        sc1[0] = sc2[0]
+
+
 def test_sep():
     from astropy.coordinates.builtin_frames import ICRS
 
@@ -722,6 +862,90 @@ def test_shorthand_representations():
     assert isinstance(sph.differentials['s'], r.SphericalCosLatDifferential)
 
 
+def test_equal():
+    from astropy.coordinates.builtin_frames import FK4, ICRS
+
+    obstime = 'B1955'
+    sc1 = FK4([1, 2]*u.deg, [3, 4]*u.deg, obstime=obstime)
+    sc2 = FK4([1, 20]*u.deg, [3, 4]*u.deg, obstime=obstime)
+
+    # Compare arrays and scalars
+    eq = sc1 == sc2
+    ne = sc1 != sc2
+    assert np.all(eq == [True, False])
+    assert np.all(ne == [False, True])
+    assert (sc1[0] == sc2[0]) == True  # noqa  (numpy True not Python True)
+    assert (sc1[0] != sc2[0]) == False  # noqa
+
+    # Broadcasting
+    eq = sc1[0] == sc2
+    ne = sc1[0] != sc2
+    assert np.all(eq == [True, False])
+    assert np.all(ne == [False, True])
+
+    # With diff only in velocity
+    sc1 = FK4([1, 2]*u.deg, [3, 4]*u.deg, radial_velocity=[1, 2]*u.km/u.s)
+    sc2 = FK4([1, 2]*u.deg, [3, 4]*u.deg, radial_velocity=[1, 20]*u.km/u.s)
+
+    eq = sc1 == sc2
+    ne = sc1 != sc2
+    assert np.all(eq == [True, False])
+    assert np.all(ne == [False, True])
+    assert (sc1[0] == sc2[0]) == True  # noqa
+    assert (sc1[0] != sc2[0]) == False  # noqa
+
+    assert (FK4() == ICRS()) is False
+    assert (FK4() == FK4(obstime='J1999')) is False
+
+
+def test_equal_exceptions():
+    from astropy.coordinates.builtin_frames import FK4, FK5
+
+    # Shape mismatch
+    sc1 = FK4([1, 2, 3]*u.deg, [3, 4, 5]*u.deg)
+    with pytest.raises(ValueError, match='cannot compare: shape mismatch'):
+        sc1 == sc1[:2]
+
+    # Different representation_type
+    sc1 = FK4(1, 2, 3, representation_type='cartesian')
+    sc2 = FK4(1*u.deg, 2*u.deg, 2, representation_type='spherical')
+    with pytest.raises(TypeError, match='cannot compare: objects must have same '
+                       'class: CartesianRepresentation vs. SphericalRepresentation'):
+        sc1 == sc2
+
+    # Different differential type
+    sc1 = FK4(1*u.deg, 2*u.deg, radial_velocity=1*u.km/u.s)
+    sc2 = FK4(1*u.deg, 2*u.deg, pm_ra_cosdec=1*u.mas/u.yr, pm_dec=1*u.mas/u.yr)
+    with pytest.raises(TypeError, match='cannot compare: objects must have same '
+                       'class: RadialDifferential vs. UnitSphericalCosLatDifferential'):
+        sc1 == sc2
+
+    # Different frame attribute
+    sc1 = FK5(1*u.deg, 2*u.deg)
+    sc2 = FK5(1*u.deg, 2*u.deg, equinox='J1999')
+    with pytest.raises(TypeError, match=r'cannot compare: objects must have equivalent '
+                       r'frames: <FK5 Frame \(equinox=J2000.000\)> '
+                       r'vs. <FK5 Frame \(equinox=J1999.000\)>'):
+        sc1 == sc2
+
+    # Different frame
+    sc1 = FK4(1*u.deg, 2*u.deg)
+    sc2 = FK5(1*u.deg, 2*u.deg, equinox='J2000')
+    with pytest.raises(TypeError, match='cannot compare: objects must have equivalent '
+                       r'frames: <FK4 Frame \(equinox=B1950.000, obstime=B1950.000\)> '
+                       r'vs. <FK5 Frame \(equinox=J2000.000\)>'):
+        sc1 == sc2
+
+    sc1 = FK4(1*u.deg, 2*u.deg)
+    sc2 = FK4()
+    with pytest.raises(ValueError, match='cannot compare: one frame has data and '
+                       'the other does not'):
+        sc1 == sc2
+    with pytest.raises(ValueError, match='cannot compare: one frame has data and '
+                       'the other does not'):
+        sc2 == sc1
+
+
 def test_dynamic_attrs():
     from astropy.coordinates.builtin_frames import ICRS
     c = ICRS(1*u.deg, 2*u.deg)
@@ -773,7 +997,65 @@ def test_quantity_attributes():
         GCRS(obsgeoloc=[1, 3]*u.km)  # incorrect shape
 
 
-@pytest.mark.remote_data
+def test_quantity_attribute_default():
+    from astropy.coordinates import BaseCoordinateFrame, QuantityAttribute
+
+    # The default default (yes) is None:
+    class MyCoord(BaseCoordinateFrame):
+        someval = QuantityAttribute(unit=u.deg)
+
+    frame = MyCoord()
+    assert frame.someval is None
+
+    frame = MyCoord(someval=15*u.deg)
+    assert u.isclose(frame.someval, 15*u.deg)
+
+    # This should work if we don't explicitly pass in a unit, but we pass in a
+    # default value with a unit
+    class MyCoord2(BaseCoordinateFrame):
+        someval = QuantityAttribute(15*u.deg)
+
+    frame = MyCoord2()
+    assert u.isclose(frame.someval, 15*u.deg)
+
+    # Since here no shape was given, we can set to any shape we like.
+    frame = MyCoord2(someval=np.ones(3)*u.deg)
+    assert frame.someval.shape == (3,)
+    assert np.all(frame.someval == 1*u.deg)
+
+    # We should also be able to insist on a given shape.
+    class MyCoord3(BaseCoordinateFrame):
+        someval = QuantityAttribute(unit=u.arcsec, shape=(3,))
+
+    frame = MyCoord3(someval=np.ones(3)*u.deg)
+    assert frame.someval.shape == (3,)
+    assert frame.someval.unit == u.arcsec
+    assert u.allclose(frame.someval.value, 3600.)
+
+    # The wrong shape raises.
+    with pytest.raises(ValueError, match='shape'):
+        MyCoord3(someval=1.*u.deg)
+
+    # As does the wrong unit.
+    with pytest.raises(u.UnitsError):
+        MyCoord3(someval=np.ones(3)*u.m)
+
+    # We are allowed a short-cut for zero.
+    frame0 = MyCoord3(someval=0)
+    assert frame0.someval.shape == (3,)
+    assert frame0.someval.unit == u.arcsec
+    assert np.all(frame0.someval.value == 0.)
+
+    # But not if it has the wrong shape.
+    with pytest.raises(ValueError, match='shape'):
+        MyCoord3(someval=np.zeros(2))
+
+    # This should fail, if we don't pass in a default or a unit
+    with pytest.raises(ValueError):
+        class MyCoord(BaseCoordinateFrame):
+            someval = QuantityAttribute()
+
+
 def test_eloc_attributes():
     from astropy.coordinates import AltAz, ITRS, GCRS, EarthLocation
 
@@ -843,6 +1125,29 @@ def test_equivalent_frames():
     assert not aa1.is_equivalent_frame(aa2)
 
 
+def test_equivalent_frame_coordinateattribute():
+    from astropy.coordinates import BaseCoordinateFrame
+    from astropy.coordinates.attributes import CoordinateAttribute
+    from astropy.coordinates.builtin_frames import HCRS
+
+    class FrameWithCoordinateAttribute(BaseCoordinateFrame):
+        coord_attr = CoordinateAttribute(HCRS)
+
+    # These frames should not be considered equivalent
+    f1 = FrameWithCoordinateAttribute(coord_attr=HCRS(1*u.deg, 2*u.deg, obstime='J2000'))
+    f2 = FrameWithCoordinateAttribute(coord_attr=HCRS(3*u.deg, 4*u.deg, obstime='J2000'))
+    f3 = FrameWithCoordinateAttribute(coord_attr=HCRS(1*u.deg, 2*u.deg, obstime='J2001'))
+
+    assert not f1.is_equivalent_frame(f2)
+    assert not f1.is_equivalent_frame(f3)
+    assert not f2.is_equivalent_frame(f3)
+
+    # They each should still be equivalent to a deep copy of themselves
+    assert f1.is_equivalent_frame(deepcopy(f1))
+    assert f2.is_equivalent_frame(deepcopy(f2))
+    assert f3.is_equivalent_frame(deepcopy(f3))
+
+
 def test_representation_subclass():
 
     # Regression test for #3354
@@ -868,8 +1173,7 @@ def test_representation_subclass():
     # A similar issue then happened in __repr__ with subclasses of
     # SphericalRepresentation.
     assert repr(frame) == ("<FK5 Coordinate (equinox=J2000.000): (lon, lat) in deg\n"
-                           "    ({})>").format(' 32.,  20.' if NUMPY_LT_1_14
-                                               else '32., 20.')
+                           "    (32., 20.)>")
 
     # A more subtle issue is when specifying a custom
     # UnitSphericalRepresentation subclass for the data and
@@ -1092,3 +1396,83 @@ def test_component_names_repr():
 
     # Check that the letter "r" has not been replaced more than once in the Frame repr
     assert repr(frame).count("JUSTONCE") == 1
+
+
+@pytest.fixture
+def reset_galactocentric_defaults():
+    # TODO: this can be removed, along with the "warning" test below, once we
+    # switch the default to 'latest' in v4.1
+    from astropy.coordinates import galactocentric_frame_defaults
+
+    # Resets before each test, and after (the yield is pytest magic)
+    galactocentric_frame_defaults.set('v4.0')
+    yield
+    galactocentric_frame_defaults.set('v4.0')
+
+
+def test_galactocentric_defaults(reset_galactocentric_defaults):
+    from astropy.coordinates import (Galactocentric,
+                                     galactocentric_frame_defaults,
+                                     BaseCoordinateFrame,
+                                     CartesianDifferential)
+
+    with galactocentric_frame_defaults.set('pre-v4.0'):
+        galcen_pre40 = Galactocentric()
+
+    with galactocentric_frame_defaults.set('v4.0'):
+        galcen_40 = Galactocentric()
+
+    with galactocentric_frame_defaults.set('latest'):
+        galcen_latest = Galactocentric()
+
+    # parameters that changed
+    assert not u.allclose(galcen_pre40.galcen_distance,
+                          galcen_40.galcen_distance)
+    assert not u.allclose(galcen_pre40.z_sun, galcen_40.z_sun)
+
+    for k in galcen_40.get_frame_attr_names():
+        if isinstance(getattr(galcen_40, k), BaseCoordinateFrame):
+            continue  # skip coordinate comparison...
+
+        elif isinstance(getattr(galcen_40, k), CartesianDifferential):
+            assert u.allclose(getattr(galcen_40, k).d_xyz,
+                              getattr(galcen_latest, k).d_xyz)
+        else:
+            assert getattr(galcen_40, k) == getattr(galcen_latest, k)
+
+
+def test_galactocentric_references(reset_galactocentric_defaults):
+    # references in the "scientific paper"-sense
+
+    from astropy.coordinates import (Galactocentric,
+                                     galactocentric_frame_defaults)
+
+    with galactocentric_frame_defaults.set('pre-v4.0'):
+        galcen_pre40 = Galactocentric()
+
+        for k in galcen_pre40.get_frame_attr_names():
+            if k == 'roll':  # no reference for this parameter
+                continue
+
+            assert k in galcen_pre40.frame_attribute_references
+
+    with galactocentric_frame_defaults.set('v4.0'):
+        galcen_40 = Galactocentric()
+
+        for k in galcen_40.get_frame_attr_names():
+            if k == 'roll':  # no reference for this parameter
+                continue
+
+            assert k in galcen_40.frame_attribute_references
+
+    with galactocentric_frame_defaults.set('v4.0'):
+        galcen_custom = Galactocentric(z_sun=15*u.pc)
+
+        for k in galcen_custom.get_frame_attr_names():
+            if k == 'roll':  # no reference for this parameter
+                continue
+
+            if k == 'z_sun':
+                assert k not in galcen_custom.frame_attribute_references
+            else:
+                assert k in galcen_custom.frame_attribute_references

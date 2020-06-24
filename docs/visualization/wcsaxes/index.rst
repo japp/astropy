@@ -5,7 +5,7 @@ Making plots with world coordinates (WCSAxes)
 *********************************************
 
 WCSAxes is a framework for making plots of Astronomical data in
-`Matplotlib <http://matplotlib.org/>`_. It was previously distributed
+`Matplotlib <https://matplotlib.org/>`_. It was previously distributed
 as a standalone package, but is now included in
 :ref:`astropy.visualization <astropy-visualization>`.
 
@@ -58,7 +58,7 @@ of WCSAxes.  An example of this usage is:
    :include-source:
    :align: center
 
-    ax = plt.subplot(projection=wcs)
+    ax = plt.subplot(projection=wcs, label='overlays')
 
     ax.imshow(hdu.data, vmin=-2.e-5, vmax=2.e-4, origin='lower')
 
@@ -78,8 +78,8 @@ when something can be done directly with the pyplot interface.
 WCSAxes supports a number of advanced plotting options, including the ability to
 control which axes to show labels on for which coordinates, overlaying contours
 from data with different coordinate systems, overlaying grids for different
-coordinate systems, dealing with plotting slices from data with more than two
-dimensions, and defining custom (non-rectangular) frames.
+coordinate systems, dealing with plotting slices from data with more dimensions
+than the plot, and defining custom (non-rectangular) frames.
 
 Using WCSAxes
 =============

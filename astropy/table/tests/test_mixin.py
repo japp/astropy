@@ -2,14 +2,14 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
 try:
-    import h5py  # pylint: disable=W0611
+    import h5py  # pylint: disable=W0611 # noqa
 except ImportError:
     HAS_H5PY = False
 else:
     HAS_H5PY = True
 
 try:
-    import yaml  # pylint: disable=W0611
+    import yaml  # pylint: disable=W0611 # noqa
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
@@ -21,7 +21,7 @@ from io import StringIO
 import pytest
 import numpy as np
 
-from astropy.coordinates import EarthLocation
+from astropy.coordinates import EarthLocation, SkyCoord
 from astropy.table import Table, QTable, join, hstack, vstack, Column, NdarrayMixin
 from astropy.table import serialize
 from astropy import time
@@ -29,6 +29,11 @@ from astropy import coordinates
 from astropy import units as u
 from astropy.table.column import BaseColumn
 from astropy.table import table_helpers
+from astropy.utils.exceptions import AstropyUserWarning
+from astropy.utils.metadata import MergeConflictWarning
+from astropy.coordinates.tests.test_representation import representation_equal
+from astropy.io.misc.asdf.tags.helpers import skycoord_equal
+
 from .conftest import MIXIN_COLS
 
 
@@ -44,7 +49,8 @@ def test_attributes(mixin_cols):
     assert m.info.description == 'a'
 
     # Cannot set unit for these classes
-    if isinstance(m, (u.Quantity, coordinates.SkyCoord, time.Time)):
+    if isinstance(m, (u.Quantity, coordinates.SkyCoord, time.Time,
+                      coordinates.BaseRepresentationOrDifferential)):
         with pytest.raises(AttributeError):
             m.info.unit = u.m
     else:
@@ -127,6 +133,7 @@ def test_votable_quantity_write(tmpdir):
     assert qt['a'].unit == 'Angstrom'
 
 
+@pytest.mark.remote_data
 @pytest.mark.parametrize('table_types', (Table, QTable))
 def test_io_time_write_fits_standard(tmpdir, table_types):
     """
@@ -140,18 +147,25 @@ def test_io_time_write_fits_standard(tmpdir, table_types):
     """
     t = table_types([[1, 2], ['string', 'column']])
     for scale in time.STANDARD_TIME_SCALES:
-        t['a'+scale] = time.Time([[1, 2], [3, 4]], format='cxcsec',
-                                 scale=scale, location=EarthLocation(
-                                     -2446354, 4237210, 4077985, unit='m'))
-        t['b'+scale] = time.Time(['1999-01-01T00:00:00.123456789',
-                                  '2010-01-01T00:00:00'], scale=scale)
+        t['a' + scale] = time.Time([[1, 2], [3, 4]], format='cxcsec',
+                                   scale=scale, location=EarthLocation(
+            -2446354, 4237210, 4077985, unit='m'))
+        t['b' + scale] = time.Time(['1999-01-01T00:00:00.123456789',
+                                    '2010-01-01T00:00:00'], scale=scale)
     t['c'] = [3., 4.]
 
     filename = str(tmpdir.join('table-tmp'))
 
     # Show that FITS format succeeds
-    t.write(filename, format='fits', overwrite=True)
-    tm = table_types.read(filename, format='fits', astropy_native=True)
+    with pytest.warns(
+            AstropyUserWarning,
+            match='Time Column "btai" has no specified location, '
+            'but global Time Position is present'):
+        t.write(filename, format='fits', overwrite=True)
+    with pytest.warns(
+            AstropyUserWarning,
+            match='Time column reference position "TRPOSn" is not specified'):
+        tm = table_types.read(filename, format='fits', astropy_native=True)
 
     for scale in time.STANDARD_TIME_SCALES:
         for ab in ('a', 'b'):
@@ -216,8 +230,14 @@ def test_io_time_write_fits_local(tmpdir, table_types):
     filename = str(tmpdir.join('table-tmp'))
 
     # Show that FITS format succeeds
-    t.write(filename, format='fits', overwrite=True)
-    tm = table_types.read(filename, format='fits', astropy_native=True)
+
+    with pytest.warns(AstropyUserWarning,
+                      match='Time Column "b_local" has no specified location'):
+        t.write(filename, format='fits', overwrite=True)
+
+    with pytest.warns(AstropyUserWarning,
+                      match='Time column reference position "TRPOSn" is not specified.'):
+        tm = table_types.read(filename, format='fits', astropy_native=True)
 
     for ab in ('a', 'b'):
         name = ab + '_local'
@@ -313,12 +333,15 @@ def test_join(table_types):
             t12 = join(t1, t2, keys='a', join_type=join_type)
         assert 'join requires masking column' in str(exc.value)
 
-    with pytest.raises(ValueError) as exc:
+    with pytest.raises(TypeError) as exc:
         t12 = join(t1, t2, keys=['a', 'skycoord'])
-    assert 'not allowed as a key column' in str(exc.value)
+    assert 'one or more key columns are not sortable' in str(exc.value)
 
     # Join does work for a mixin which is a subclass of np.ndarray
-    t12 = join(t1, t2, keys=['quantity'])
+    with pytest.warns(MergeConflictWarning,
+                      match="In merged column 'quantity' the 'description' "
+                            "attribute does not match"):
+        t12 = join(t1, t2, keys=['quantity'])
     assert np.all(t12['a_1'] == t1['a'])
 
 
@@ -365,6 +388,8 @@ def assert_table_name_col_equal(t, name, col):
     if isinstance(col, coordinates.SkyCoord):
         assert np.all(t[name].ra == col.ra)
         assert np.all(t[name].dec == col.dec)
+    elif isinstance(col, coordinates.BaseRepresentationOrDifferential):
+        assert np.all(representation_equal(t[name], col))
     elif isinstance(col, u.Quantity):
         if type(t) is QTable:
             assert np.all(t[name] == col)
@@ -483,13 +508,22 @@ def test_vstack():
 
 def test_insert_row(mixin_cols):
     """
-    Test inserting a row, which only works for BaseColumn and Quantity
+    Test inserting a row, which works for Column, Quantity, Time and SkyCoord.
     """
     t = QTable(mixin_cols)
+    t0 = t.copy()
     t['m'].info.description = 'd'
-    if isinstance(t['m'], (u.Quantity, Column, time.Time)):
+    idxs = [0, -1, 1, 2, 3]
+    if isinstance(t['m'], (u.Quantity, Column, time.Time, coordinates.SkyCoord)):
         t.insert_row(1, t[-1])
-        assert t[1] == t[-1]
+
+        for name in t.colnames:
+            col = t[name]
+            if isinstance(col, coordinates.SkyCoord):
+                assert skycoord_equal(col, t0[name][idxs])
+            else:
+                assert np.all(col == t0[name][idxs])
+
         assert t['m'].info.description == 'd'
     else:
         with pytest.raises(ValueError) as exc:
@@ -588,6 +622,47 @@ def test_quantity_representation():
                            '----',
                            ' 1.0',
                            ' 2.0']
+
+
+def test_representation_representation():
+    """
+    Test that Representations are represented correctly.
+    """
+    # With no unit we get "None" in the unit row
+    c = coordinates.CartesianRepresentation([0], [1], [0], unit=u.one)
+    t = Table([c])
+    assert t.pformat() == ['    col0    ',
+                           '------------',
+                           '(0., 1., 0.)']
+
+    c = coordinates.CartesianRepresentation([0], [1], [0], unit='m')
+    t = Table([c])
+    assert t.pformat() == ['    col0    ',
+                           '     m      ',
+                           '------------',
+                           '(0., 1., 0.)']
+
+    c = coordinates.SphericalRepresentation([10]*u.deg, [20]*u.deg, [1]*u.pc)
+    t = Table([c])
+    assert t.pformat() == ['     col0     ',
+                           ' deg, deg, pc ',
+                           '--------------',
+                           '(10., 20., 1.)']
+
+    c = coordinates.UnitSphericalRepresentation([10]*u.deg, [20]*u.deg)
+    t = Table([c])
+    assert t.pformat() == ['   col0   ',
+                           '   deg    ',
+                           '----------',
+                           '(10., 20.)']
+
+    c = coordinates.SphericalCosLatDifferential(
+        [10]*u.mas/u.yr, [2]*u.mas/u.yr, [10]*u.km/u.s)
+    t = Table([c])
+    assert t.pformat() == ['           col0           ',
+                           'mas / yr, mas / yr, km / s',
+                           '--------------------------',
+                           '            (10., 2., 10.)']
 
 
 def test_skycoord_representation():
@@ -727,6 +802,8 @@ def test_rename_mixin_columns(mixin_cols):
     elif isinstance(t['mm'], coordinates.SkyCoord):
         assert np.all(t['mm'].ra == tc['m'].ra)
         assert np.all(t['mm'].dec == tc['m'].dec)
+    elif isinstance(t['mm'], coordinates.BaseRepresentationOrDifferential):
+        assert np.all(representation_equal(t['mm'], tc['m']))
     else:
         assert np.all(t['mm'] == tc['m'])
 
@@ -740,3 +817,15 @@ def test_represent_mixins_as_columns_unit_fix():
     t['a'].unit = 'not a valid unit'
     t['a'].mask[1] = True
     serialize.represent_mixins_as_columns(t)
+
+
+@pytest.mark.skipif(not HAS_YAML, reason='mixin columns in .ecsv need yaml')
+def test_skycoord_with_velocity():
+    # Regression test for gh-6447
+    sc = SkyCoord([1], [2], unit='deg', galcen_v_sun=None)
+    t = Table([sc])
+    s = StringIO()
+    t.write(s, format='ascii.ecsv', overwrite=True)
+    s.seek(0)
+    t2 = Table.read(s.read(), format='ascii.ecsv')
+    assert skycoord_equal(t2['col0'], sc)

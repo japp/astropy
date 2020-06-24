@@ -152,6 +152,9 @@ class TestGroupsFunctions(FitsTestCase):
 
         # Test putting the data into a GroupsHDU and round-tripping it
         ghdu = fits.GroupsHDU(data=x)
+        assert ghdu.parnames == ['abc', 'xyz']
+        assert ghdu.header['GCOUNT'] == 10
+
         ghdu.writeto(self.temp('test.fits'))
 
         with fits.open(self.temp('test.fits')) as h:
@@ -209,3 +212,13 @@ class TestGroupsFunctions(FitsTestCase):
             assert x.dtype.names == ('abc', 'xyz', '_abc', 'DATA')
             assert x.par('abc')[0] == 5
             assert (x.par('abc')[1:] == pdata1[1:] * 2).all()
+
+    def test_group_bad_naxis(self):
+        """Test file without NAXIS1 keyword.
+        Regression test for https://github.com/astropy/astropy/issues/9709
+        """
+        testfile = os.path.join('invalid', 'group_invalid.fits')
+        with fits.open(self.data(testfile)) as hdul:
+            assert len(hdul) == 1
+            assert hdul[0].header['GROUPS']
+            assert hdul[0].data is None

@@ -1,20 +1,24 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
+from astropy.utils.tests.test_metadata import MetaBaseTest
 import gc
 import sys
 import copy
 from io import StringIO
 from collections import OrderedDict
+import pickle
 
 import pytest
 import numpy as np
 from numpy.testing import assert_allclose, assert_array_equal
 
 from astropy.io import fits
-from astropy.table import Table, QTable, MaskedColumn
+from astropy.table import (Table, QTable, MaskedColumn, TableReplaceWarning,
+                           TableAttribute)
 from astropy.tests.helper import (assert_follows_unicode_guidelines,
                                   ignore_warnings, catch_warnings)
+from astropy.coordinates import SkyCoord
 
 from astropy.utils.data import get_pkg_data_filename
 from astropy import table
@@ -26,11 +30,18 @@ try:
     with ignore_warnings(DeprecationWarning):
         # Ignore DeprecationWarning on pandas import in Python 3.5--see
         # https://github.com/astropy/astropy/issues/4380
-        import pandas  # pylint: disable=W0611
+        import pandas  # noqa
 except ImportError:
     HAS_PANDAS = False
 else:
     HAS_PANDAS = True
+
+
+try:
+    import yaml  # noqa
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
 
 
 class SetupData:
@@ -267,7 +278,7 @@ class TestNewFromColumns():
 
     def test_from_np_array(self, table_types):
         cols = [table_types.Column(name='a', data=np.array([1, 2, 3], dtype=np.int64),
-                       dtype=np.float64),
+                                   dtype=np.float64),
                 table_types.Column(name='b', data=np.array([4, 5, 6], dtype=np.float32))]
         t = table_types.Table(cols)
         assert np.all(t['a'] == np.array([1, 2, 3], dtype=np.float64))
@@ -296,7 +307,7 @@ class TestReverse():
 
     def test_reverse(self, table_types):
         t = table_types.Table([[1, 2, 3],
-                   ['a', 'b', 'cc']])
+                               ['a', 'b', 'cc']])
         t.reverse()
         assert np.all(t['col0'] == np.array([3, 2, 1]))
         assert np.all(t['col1'] == np.array(['cc', 'b', 'a']))
@@ -320,6 +331,51 @@ class TestReverse():
         t.reverse()
         assert np.all(t['x'] == x[::-1])
         assert np.all(t['y'] == y[::-1])
+
+    def test_reverse_mixin(self):
+        """Test reverse for a mixin with no item assignment, fix for #9836"""
+        sc = SkyCoord([1, 2], [3, 4], unit='deg')
+        t = Table([[2, 1], sc], names=['a', 'sc'])
+        t.reverse()
+        assert np.all(t['a'] == [1, 2])
+        assert np.allclose(t['sc'].ra.to_value('deg'), [2, 1])
+
+
+@pytest.mark.usefixtures('table_types')
+class TestRound():
+
+    def test_round_int(self, table_types):
+        t = table_types.Table([['a', 'b', 'c'],
+                               [1.11, 2.3, 3.0],
+                               [1.123456, 2.9876, 3.901]])
+        t.round()
+        assert np.all(t['col0'] == ['a', 'b', 'c'])
+        assert np.all(t['col1'] == [1., 2., 3.])
+        assert np.all(t['col2'] == [1., 3., 4.])
+
+    def test_round_dict(self, table_types):
+        t = table_types.Table([['a', 'b', 'c'],
+                               [1.5, 2.5, 3.0111],
+                               [1.123456, 2.9876, 3.901]])
+
+        t.round({'col1': 0, 'col2': 3})
+        assert np.all(t['col0'] == ['a', 'b', 'c'])
+        assert np.all(t['col1'] == [2.0, 2.0, 3.0])
+        assert np.all(t['col2'] == [1.123, 2.988, 3.901])
+
+    def test_round_invalid(self, table_types):
+        t = table_types.Table([[1, 2, 3]])
+        with pytest.raises(ValueError, match="'decimals' argument must be an int or a dict"):
+            t.round(0.5)
+
+    def test_round_kind(self, table_types):
+        for typecode in 'bBhHiIlLqQpPefdgFDG': # AllInteger, AllFloat
+            arr = np.array([4, 16], dtype=typecode)
+            t = Table([arr])
+            col0 = t['col0']
+            t.round(decimals=-1) # Round to nearest 10
+            assert np.all(t['col0'] == [0, 20])
+            assert t['col0'] is col0
 
 
 @pytest.mark.usefixtures('table_types')
@@ -584,7 +640,8 @@ class TestAddColumns(SetupData):
         self._setup(table_types)
         t = table_types.Table([self.a, self.b, self.c])
         with pytest.raises(ValueError):
-            t.add_columns([table_types.Column(name='a', data=[0, 1, 2]), table_types.Column(name='b', data=[0, 1, 2])])
+            t.add_columns([table_types.Column(name='a', data=[0, 1, 2]),
+                           table_types.Column(name='b', data=[0, 1, 2])])
         t.add_columns([table_types.Column(name='a', data=[0, 1, 2]),
                        table_types.Column(name='b', data=[0, 1, 2])],
                       rename_duplicate=True)
@@ -692,7 +749,7 @@ class TestAddRow(SetupData):
         assert len(t) == 4
         assert np.all(t['a'] == np.array([1, 2, 3, 4]))
         assert np.allclose(t['b'], np.array([4.0, 5.1, 6.2, 7.2]))
-        assert np.all(t['c'] == np.array(['7', '8', '9', '1']))
+        assert np.all(t['c'] == np.array(['7', '8', '9', '10']))
 
     def test_add_with_dict(self, table_types):
         self._setup(table_types)
@@ -841,8 +898,8 @@ class TestRemove(SetupData):
         assert self.t.as_array().size == 0
         # Regression test for gh-8640
         assert not self.t
-        assert isinstance(self.t == None, np.ndarray)
-        assert (self.t == None).size == 0
+        assert isinstance(self.t == None, np.ndarray)  # noqa
+        assert (self.t == None).size == 0  # noqa
 
     def test_2(self, table_types):
         self._setup(table_types)
@@ -956,8 +1013,8 @@ class TestRemove(SetupData):
         assert self.t.as_array().size == 0
         # Regression test for gh-8640
         assert not self.t
-        assert isinstance(self.t == None, np.ndarray)
-        assert (self.t == None).size == 0
+        assert isinstance(self.t == None, np.ndarray)  # noqa
+        assert (self.t == None).size == 0  # noqa
 
     def test_delitem2(self, table_types):
         self._setup(table_types)
@@ -986,8 +1043,8 @@ class TestKeep(SetupData):
         assert t.as_array().size == 0
         # Regression test for gh-8640
         assert not t
-        assert isinstance(t == None, np.ndarray)
-        assert (t == None).size == 0
+        assert isinstance(t == None, np.ndarray)  # noqa
+        assert (t == None).size == 0  # noqa
 
     def test_2(self, table_types):
         self._setup(table_types)
@@ -1067,7 +1124,8 @@ class TestSort():
                                           [3, 4],
                                           [1, 2]]))
 
-    def test_single_reverse(self, table_types):
+    @pytest.mark.parametrize('create_index', [False, True])
+    def test_single_reverse(self, table_types, create_index):
         t = table_types.Table()
         t.add_column(table_types.Column(name='a', data=[2, 1, 3]))
         t.add_column(table_types.Column(name='b', data=[6, 5, 4]))
@@ -1175,10 +1233,13 @@ class TestSort():
         assert np.all(t['a'][i0] == t['a'][i1])
         assert np.all(t['b'][i0] == t['b'][i1])
 
-    def test_argsort_reverse(self, table_types):
+    @pytest.mark.parametrize('add_index', [False, True])
+    def test_argsort_reverse(self, table_types, add_index):
         t = table_types.Table()
         t.add_column(table_types.Column(name='a', data=[2, 1, 3, 2, 3, 1]))
         t.add_column(table_types.Column(name='b', data=[6, 5, 4, 3, 5, 4]))
+        if add_index:
+            t.add_index('a')
         assert np.all(t.argsort(reverse=True) == np.array([4, 2, 0, 3, 1, 5]))
         i0 = t.argsort('a', reverse=True)
         i1 = np.array([4, 2, 3, 0, 5, 1])
@@ -1322,8 +1383,8 @@ class TestConvertNumpyArray():
 
             arr2 = t.as_array(keep_byteorder=True)
             for colname in data.columns.names:
-                assert (data[colname].dtype.byteorder ==
-                        arr2[colname].dtype.byteorder)
+                assert (data[colname].dtype.byteorder
+                        == arr2[colname].dtype.byteorder)
 
 
 def _assert_copies(t, t2, deep=True):
@@ -1382,7 +1443,71 @@ def test_disallow_inequality_comparisons():
         t <= -1.1
 
 
-def test_equality():
+def test_values_equal_part1():
+
+    col1 = [1, 2]
+    col2 = [1.0, 2.0]
+    col3 = ['a', 'b']
+    t1 = table.Table([col1, col2, col3], names=['a', 'b', 'c'])
+    t2 = table.Table([col1, col2], names=['a', 'b'])
+    t3 = table.table_helpers.simple_table()
+    tm = t1.copy()
+    tm['time'] = Time([1, 2], format='cxcsec')
+    tm1 = tm.copy()
+    tm1['time'][0] = np.ma.masked
+
+    tq = table.table_helpers.simple_table()
+    tq['quantity'] = [1., 2., 3.] * u.m
+
+    tsk = table.table_helpers.simple_table()
+    tsk['sk'] = SkyCoord(1, 2, unit='deg')
+    eqsk = tsk.values_equal(tsk)
+    for col in eqsk.itercols():
+        assert np.all(col)
+
+    with pytest.raises(ValueError, match='cannot compare tables with different column names'):
+        t2.values_equal(t1)
+
+    with pytest.raises(ValueError, match='unable to compare column a'):
+        # Shape mismatch
+        t3.values_equal(t1)
+
+    with pytest.raises(ValueError, match='unable to compare column c'):
+        # Type mismatch in column c causes FutureWarning
+        t1.values_equal(2)
+
+    with pytest.raises(ValueError, match='unable to compare column c'):
+        t1.values_equal([1, 2])
+
+    eq = t2.values_equal(t2)
+    for col in eq.colnames:
+        assert np.all(eq[col] == [True, True])
+
+    eq1 = tm1.values_equal(tm)
+    for col in eq1.colnames:
+        assert np.all(eq1[col] == [True, True])
+
+    eq2 = tq.values_equal(tq)
+    for col in eq2.colnames:
+        assert np.all(eq2[col] == [True, True, True])
+
+    eq3 = t2.values_equal(2)
+    for col in eq3.colnames:
+        assert np.all(eq3[col] == [False, True])
+
+    eq4 = t2.values_equal([1, 2])
+    for col in eq4.colnames:
+        assert np.all(eq4[col] == [True, True])
+
+    # Compare table to its first row
+    t = table.Table(rows=[(1, 'a'),
+                          (1, 'b')])
+    eq = t.values_equal(t[0])
+    assert np.all(eq['col0'] == [True, True])
+    assert np.all(eq['col1'] == [True, False])
+
+
+def test_rows_equal():
 
     t = table.Table.read([' a b  c  d',
                           ' 2 c 7.0 0',
@@ -1392,8 +1517,8 @@ def test_equality():
                           ' 0 a 0.0 4',
                           ' 1 b 3.0 5',
                           ' 1 a 2.0 6',
-                          ' 1 a 1.0 7',
-                         ], format='ascii')
+                          ' 1 a 1.0 7'],
+                         format='ascii')
 
     # All rows are equal
     assert np.all(t == t)
@@ -1416,7 +1541,7 @@ def test_equality():
                            ' 1 b 3.0 5',
                            ' 1 c 2.0 6',
                            ' 1 a 1.0 7',
-                          ], format='ascii')
+                           ], format='ascii')
 
     # In the above cases, Row.__eq__ gets called, but now need to make sure
     # Table.__eq__ also gets called.
@@ -1439,7 +1564,7 @@ def test_equality_masked():
                           ' 1 b 3.0 5',
                           ' 1 a 2.0 6',
                           ' 1 a 1.0 7',
-                         ], format='ascii')
+                          ], format='ascii')
 
     # Make into masked table
     t = table.Table(t, masked=True)
@@ -1465,7 +1590,7 @@ def test_equality_masked():
                            ' 1 b 3.0 5',
                            ' 1 c 2.0 6',
                            ' 1 a 1.0 7',
-                          ], format='ascii')
+                           ], format='ascii')
 
     # In the above cases, Row.__eq__ gets called, but now need to make sure
     # Table.__eq__ also gets called.
@@ -1499,7 +1624,7 @@ def test_equality_masked_bug():
                           ' 1 b 3.0 5',
                           ' 1 a 2.0 6',
                           ' 1 a 1.0 7',
-                         ], format='ascii')
+                          ], format='ascii')
 
     t = table.Table(t, masked=True)
 
@@ -1512,7 +1637,7 @@ def test_equality_masked_bug():
                            ' 1 b 3.0 5',
                            ' 1 c 2.0 6',
                            ' 1 a 1.0 7',
-                          ], format='ascii')
+                           ], format='ascii')
 
     assert np.all((t.as_array() == t2) == np.array([0, 1, 0, 1, 0, 1, 0, 1], dtype=bool))
 
@@ -1520,8 +1645,6 @@ def test_equality_masked_bug():
 # Check that the meta descriptor is working as expected. The MetaBaseTest class
 # takes care of defining all the tests, and we simply have to define the class
 # and any minimal set of args to pass.
-
-from astropy.utils.tests.test_metadata import MetaBaseTest
 
 
 class TestMetaTable(MetaBaseTest):
@@ -1559,7 +1682,7 @@ def test_unicode_policy():
                           ' 1 b 3.0 5',
                           ' 1 a 2.0 6',
                           ' 1 a 1.0 7',
-                         ], format='ascii')
+                          ], format='ascii')
     assert_follows_unicode_guidelines(t)
 
 
@@ -1721,17 +1844,29 @@ class TestPandas:
             else:
                 assert t[column].byteswap().newbyteorder().dtype == t2[column].dtype
 
+    @pytest.mark.parametrize('unsigned', ['u', ''])
+    @pytest.mark.parametrize('bits', [8, 16, 32, 64])
+    def test_nullable_int(self, unsigned, bits):
+        np_dtype = f'{unsigned}int{bits}'
+        c = MaskedColumn([1, 2], mask=[False, True], dtype=np_dtype)
+        t = Table([c])
+        df = t.to_pandas()
+        pd_dtype = np_dtype.replace('i', 'I').replace('u', 'U')
+        assert str(df['col0'].dtype) == pd_dtype
+        t2 = Table.from_pandas(df)
+        assert str(t2['col0'].dtype) == np_dtype
+        assert np.all(t2['col0'].mask == [False, True])
+        assert np.all(t2['col0'] == c)
+
     def test_2d(self):
 
         t = table.Table()
         t['a'] = [1, 2, 3]
         t['b'] = np.ones((3, 2))
 
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError,
+                           match='Cannot convert a table with multidimensional columns'):
             t.to_pandas()
-        assert (exc.value.args[0] ==
-            "Cannot convert a table with multi-dimensional columns "
-            "to a pandas DataFrame. Offending columns are: ['b']")
 
     def test_mixin_pandas(self):
         t = table.QTable()
@@ -1830,7 +1965,8 @@ class TestPandas:
         assert t2.colnames == ['tm', 'x']
         assert np.allclose(t2['tm'].jyear, tm.jyear)
 
-    def test_masking(self):
+    @pytest.mark.parametrize('use_nullable_int', [True, False])
+    def test_masking(self, use_nullable_int):
 
         t = table.Table(masked=True)
 
@@ -1851,7 +1987,13 @@ class TestPandas:
                        2584288728310999296]
         t['Source'].mask = [False, False, False]
 
-        d = t.to_pandas()
+        if use_nullable_int:  # Default
+            # No warning with the default use_nullable_int=True
+            d = t.to_pandas(use_nullable_int=use_nullable_int)
+        else:
+            with pytest.warns(TableReplaceWarning,
+                              match=r"converted column 'a' from int(32|64) to float64"):
+                d = t.to_pandas(use_nullable_int=use_nullable_int)
 
         t2 = table.Table.from_pandas(d)
 
@@ -1859,12 +2001,13 @@ class TestPandas:
             assert np.all(column.data == t2[name].data)
             if hasattr(t2[name], 'mask'):
                 assert np.all(column.mask == t2[name].mask)
-            # Masked integer type comes back as float.  Nothing we can do about this.
+
             if column.dtype.kind == 'i':
-                if np.any(column.mask):
+                if np.any(column.mask) and not use_nullable_int:
                     assert t2[name].dtype.kind == 'f'
                 else:
                     assert t2[name].dtype.kind == 'i'
+
                 assert_array_equal(column.data,
                                    t2[name].data.astype(column.dtype))
             else:
@@ -1872,6 +2015,26 @@ class TestPandas:
                     assert column.dtype == t2[name].dtype
                 else:
                     assert column.byteswap().newbyteorder().dtype == t2[name].dtype
+
+    def test_units(self):
+        import pandas as pd
+        import astropy.units as u
+
+        df = pd.DataFrame({'x': [1, 2, 3], 't': [1.3, 1.2, 1.8]})
+        t = table.Table.from_pandas(df, units={'x': u.m, 't': u.s})
+
+        assert t['x'].unit == u.m
+        assert t['t'].unit == u.s
+
+        # test error if not a mapping
+        with pytest.raises(TypeError):
+            table.Table.from_pandas(df, units=[u.m, u.s])
+
+        # test warning is raised if additional columns in units dict
+        with pytest.warns(UserWarning) as record:
+            table.Table.from_pandas(df, units={'x': u.m, 't': u.s, 'y': u.m})
+        assert len(record) == 1
+        assert "{'y'}" in record[0].message.args[0]
 
 
 @pytest.mark.usefixtures('table_types')
@@ -1881,7 +2044,9 @@ class TestReplaceColumn(SetupData):
         self._setup(table_types)
         t = table_types.Table([self.a, self.b])
 
-        with pytest.raises(ValueError, match=r"Cannot replace column 'a'.  Use Table.replace_column.. instead."):
+        with pytest.raises(ValueError,
+                           match=r"Cannot replace column 'a'.  Use "
+                           "Table.replace_column.. instead."):
             t.columns['a'] = [1, 2, 3]
 
         with pytest.raises(ValueError, match=r"column name not there is not in the table"):
@@ -2192,7 +2357,7 @@ def test_replace_update_column_via_setitem_warnings_refcount():
     Reference count changes.
     """
     t = table.Table([[1, 2, 3], [4, 5, 6]], names=['a', 'b'])
-    ta = t['a']  # Generate an extra reference to original column
+    ta = t['a']  # noqa : Generate an extra reference to original column
 
     with catch_warnings() as w:
         with table.conf.set_temp('replace_warnings',
@@ -2258,7 +2423,7 @@ def test_primary_key_is_inherited():
     original_key = t.primary_key
 
     # can't test if tuples are equal, so just check content
-    assert original_key[0] is 'a'
+    assert original_key[0] == 'a'
 
     t2 = t[:]
     t3 = t.copy()
@@ -2335,6 +2500,123 @@ def test_tolist():
     assert isinstance(t['c'].tolist()[0][0], str)
 
 
+class MyTable(Table):
+    foo = TableAttribute()
+    bar = TableAttribute(default=[])
+    baz = TableAttribute(default=1)
+
+
+def test_table_attribute():
+    assert repr(MyTable.baz) == '<TableAttribute name=baz default=1>'
+
+    t = MyTable([[1, 2]])
+    # __attributes__ created on the fly on the first access of an attribute
+    assert '__attributes__' not in t.meta
+    assert t.foo is None
+    assert '__attributes__' in t.meta
+    t.bar.append(2.0)
+    assert t.bar == [2.0]
+    assert t.baz == 1
+
+    t.baz = 'baz'
+    assert t.baz == 'baz'
+
+    # Table attributes round-trip through pickle
+    tp = pickle.loads(pickle.dumps(t))
+    assert tp.foo is None
+    assert tp.baz == 'baz'
+    assert tp.bar == [2.0]
+
+    # Allow initialization of attributes in table creation
+    t2 = MyTable([[1, 2]], foo=3, bar='bar', baz='baz')
+    assert t2.foo == 3
+    assert t2.bar == 'bar'
+    assert t2.baz == 'baz'
+
+
+@pytest.mark.skipif('not HAS_YAML')
+def test_table_attribute_ecsv():
+    # Table attribute round-trip through ECSV
+    t = MyTable([[1, 2]], bar=[2.0], baz='baz')
+    out = StringIO()
+    t.write(out, format='ascii.ecsv')
+    t2 = MyTable.read(out.getvalue(), format='ascii.ecsv')
+    assert t2.foo is None
+    assert t2.bar == [2.0]
+    assert t2.baz == 'baz'
+
+
+def test_table_attribute_fail():
+    # Code raises ValueError(f'{attr} not allowed as TableAttribute') but in this
+    # context it gets re-raised as a RuntimeError during class definition.
+    with pytest.raises(RuntimeError, match='Error calling __set_name__'):
+        class MyTable2(Table):
+            descriptions = TableAttribute()  # Conflicts with init arg
+
+    with pytest.raises(RuntimeError, match='Error calling __set_name__'):
+        class MyTable3(Table):
+            colnames = TableAttribute()  # Conflicts with built-in property
+
+
+def test_set_units_fail():
+    dat = [[1.0, 2.0], ['aa', 'bb']]
+    with pytest.raises(ValueError, match='sequence of unit values must match number of columns'):
+        Table(dat, units=[u.m])
+    with pytest.raises(ValueError, match='invalid column name c for setting unit attribute'):
+        Table(dat, units={'c': u.m})
+
+
+def test_set_units():
+    dat = [[1.0, 2.0], ['aa', 'bb'], [3, 4]]
+    exp_units = (u.m, None, None)
+    for cls in Table, QTable:
+        for units in ({'a': u.m, 'c': ''}, exp_units):
+            qt = cls(dat, units=units, names=['a', 'b', 'c'])
+            if cls is QTable:
+                assert isinstance(qt['a'], u.Quantity)
+                assert isinstance(qt['b'], table.Column)
+                assert isinstance(qt['c'], table.Column)
+            for col, unit in zip(qt.itercols(), exp_units):
+                assert col.info.unit is unit
+
+
+def test_set_descriptions():
+    dat = [[1.0, 2.0], ['aa', 'bb']]
+    exp_descriptions = ('my description', None)
+    for cls in Table, QTable:
+        for descriptions in ({'a': 'my description'}, exp_descriptions):
+            qt = cls(dat, descriptions=descriptions, names=['a', 'b'])
+            for col, description in zip(qt.itercols(), exp_descriptions):
+                assert col.info.description == description
+
+
+def test_set_units_from_row():
+    text = ['a,b',
+            ',s',
+            '1,2',
+            '3,4']
+    units = Table.read(text, format='ascii', data_start=1, data_end=2)[0]
+    t = Table.read(text, format='ascii', data_start=2, units=units)
+    assert isinstance(units, table.Row)
+    assert t['a'].info.unit is None
+    assert t['b'].info.unit is u.s
+
+
+def test_set_units_descriptions_read():
+    """Test setting units and descriptions via Table.read.  The test here
+    is less comprehensive because the implementation is exactly the same
+    as for Table.__init__ (calling Table._set_column_attribute) """
+    for cls in Table, QTable:
+        t = cls.read(['a b', '1 2'],
+                     format='ascii',
+                     units=[u.m, u.s],
+                     descriptions=['hi', 'there'])
+        assert t['a'].info.unit is u.m
+        assert t['b'].info.unit is u.s
+        assert t['a'].info.description == 'hi'
+        assert t['b'].info.description == 'there'
+
+
 def test_broadcasting_8933():
     """Explicitly check re-work of code related to broadcasting in #8933"""
     t = table.Table([[1, 2]])  # Length=2 table
@@ -2393,6 +2675,50 @@ def test_custom_masked_column_in_nonmasked_table():
         assert type(t['e']) is MySubMaskedColumn  # sub-class not downgraded
 
 
+def test_sort_with_mutable_skycoord():
+    """Test sorting a table that has a mutable column such as SkyCoord.
+
+    In this case the sort is done in-place
+    """
+    t = Table([[2, 1], SkyCoord([4, 3], [6, 5], unit='deg,deg')], names=['a', 'sc'])
+    meta = {'a': [1, 2]}
+    ta = t['a']
+    tsc = t['sc']
+    t['sc'].info.meta = meta
+    t.sort('a')
+    assert np.all(t['a'] == [1, 2])
+    assert np.allclose(t['sc'].ra.to_value(u.deg), [3, 4])
+    assert np.allclose(t['sc'].dec.to_value(u.deg), [5, 6])
+    assert t['a'] is ta
+    assert t['sc'] is tsc
+
+    # Prior to astropy 4.1 this was a deep copy of SkyCoord column; after 4.1
+    # it is a reference.
+    t['sc'].info.meta['a'][0] = 100
+    assert meta['a'][0] == 100
+
+
+def test_sort_with_non_mutable():
+    """Test sorting a table that has a non-mutable column.
+    """
+    t = Table([[2, 1], [3, 4]], names=['a', 'b'])
+    ta = t['a']
+    tb = t['b']
+    t['b'].setflags(write=False)
+    meta = {'a': [1, 2]}
+    t['b'].info.meta = meta
+    t.sort('a')
+    assert np.all(t['a'] == [1, 2])
+    assert np.all(t['b'] == [4, 3])
+    assert ta is t['a']
+    assert tb is not t['b']
+
+    # Prior to astropy 4.1 this was a deep copy of SkyCoord column; after 4.1
+    # it is a reference.
+    t['b'].info.meta['a'][0] = 100
+    assert meta['a'][0] == 1
+
+
 def test_init_with_list_of_masked_arrays():
     """Test the fix for #8977"""
     m0 = np.ma.array([0, 1, 2], mask=[True, False, True])
@@ -2427,3 +2753,85 @@ def test_data_to_col_convert_strategy():
     t['b'] = np.int64(2)  # Failed previously
     assert np.all(t['a'] == [1, 1])
     assert np.all(t['b'] == [2, 2])
+
+
+def test_rows_with_mixins():
+    """Test for #9165 to allow adding a list of mixin objects.
+    Also test for fix to #9357 where group_by() failed due to
+    mixin object not having info.indices set to [].
+    """
+    tm = Time([1, 2], format='cxcsec')
+    q = [1, 2] * u.m
+    mixed1 = [1 * u.m, 2]  # Mixed input, fails to convert to Quantity
+    mixed2 = [2, 1 * u.m]  # Mixed input, not detected as potential mixin
+    rows = [(1, q[0], tm[0]),
+            (2, q[1], tm[1])]
+    t = table.QTable(rows=rows)
+    t['a'] = [q[0], q[1]]
+    t['b'] = [tm[0], tm[1]]
+    t['m1'] = mixed1
+    t['m2'] = mixed2
+
+    assert np.all(t['col1'] == q)
+    assert np.all(t['col2'] == tm)
+    assert np.all(t['a'] == q)
+    assert np.all(t['b'] == tm)
+    assert np.all(t['m1'][ii] == mixed1[ii] for ii in range(2))
+    assert np.all(t['m2'][ii] == mixed2[ii] for ii in range(2))
+    assert type(t['m1']) is table.Column
+    assert t['m1'].dtype is np.dtype(object)
+    assert type(t['m2']) is table.Column
+    assert t['m2'].dtype is np.dtype(object)
+
+    # Ensure group_by() runs without failing for sortable columns.
+    # The columns 'm1', and 'm2' are object dtype and not sortable.
+    for name in ['col0', 'col1', 'col2', 'a', 'b']:
+        t.group_by(name)
+
+    # For good measure include exactly the failure in #9357 in which the
+    # list of Time() objects is in the Table initializer.
+    mjds = [Time(58000, format="mjd")]
+    t = Table([mjds, ["gbt"]], names=("mjd", "obs"))
+    t.group_by("obs")
+
+
+def test_iterrows():
+    dat = [(1, 2, 3),
+           (4, 5, 6),
+           (7, 8, 6)]
+    t = table.Table(rows=dat, names=('a', 'b', 'c'))
+    c_s = []
+    a_s = []
+    for c, a in t.iterrows('c', 'a'):
+        a_s.append(a)
+        c_s.append(c)
+    assert np.all(t['a'] == a_s)
+    assert np.all(t['c'] == c_s)
+
+    rows = [row for row in t.iterrows()]
+    assert rows == dat
+
+    with pytest.raises(ValueError, match='d is not a valid column name'):
+        t.iterrows('d')
+
+
+def test_values():
+    dat = [(1, 2, 3),
+           (4, 5, 6),
+           (7, 8, 6)]
+    t = table.Table(rows=dat, names=('a', 'b', 'c'))
+    assert isinstance(t.values(), list)
+    for i in t.values():
+        assert isinstance(i, table.column.Column)
+
+
+def test_items():
+    dat = [(1, 2, 3),
+           (4, 5, 6),
+           (7, 8, 9)]
+    t = table.Table(rows=dat, names=('a', 'b', 'c'))
+
+    assert isinstance(t.items(), type(OrderedDict({}).items()))
+
+    for i in list(t.items()):
+        assert isinstance(i, tuple)

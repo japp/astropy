@@ -19,7 +19,7 @@ the packages are called ``elpa-flycheck`` and ``flake8``).
 
           The setup below is on purpose minimal.  In principle, it is possible
           to use `Emacs for Python development
-          <https://realpython.com/blog/python/emacs-the-best-python-editor/>`_,
+          <https://realpython.com/emacs-the-best-python-editor/>`_,
           with, e.g., `elpy <https://elpy.readthedocs.io/>`_.
 
 No tabs
@@ -40,7 +40,7 @@ Delete trailing white spaces
 One can `delete trailing whitespace
 <https://www.emacswiki.org/emacs/DeletingWhitespace#toc3>`_ with ``M-x
 delete-trailing-whitespace``. To ensure this is done every time a python file
-is saved, use::
+is saved, use:
 
 .. code-block:: scheme
 

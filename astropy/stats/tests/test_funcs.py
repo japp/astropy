@@ -6,14 +6,14 @@ import numpy as np
 from numpy.testing import assert_equal, assert_allclose
 
 try:
-    import scipy  # pylint: disable=W0611
+    import scipy  # pylint: disable=W0611 # noqa
 except ImportError:
     HAS_SCIPY = False
 else:
     HAS_SCIPY = True
 
 try:
-    import mpmath  # pylint: disable=W0611
+    import mpmath  # pylint: disable=W0611 # noqa
 except ImportError:
     HAS_MPMATH = False
 else:
@@ -22,6 +22,7 @@ else:
 from astropy.stats import funcs
 from astropy import units as u
 from astropy.tests.helper import catch_warnings
+from astropy.utils.exceptions import AstropyDeprecationWarning
 from astropy.utils.misc import NumpyRNGContext
 
 
@@ -100,12 +101,28 @@ def test_median_absolute_deviation_nans():
     assert funcs.median_absolute_deviation(array) == 1
 
 
+def test_median_absolute_deviation_nans_masked():
+    """
+    Regression test to ensure ignore_nan=True gives same results for
+    ndarray and masked arrays that contain +/-inf.
+    """
+
+    data1 = np.array([1., np.nan, 2, np.inf])
+    data2 = np.ma.masked_array(data1, mask=False)
+    mad1 = funcs.median_absolute_deviation(data1, ignore_nan=True)
+    mad2 = funcs.median_absolute_deviation(data2, ignore_nan=True)
+    assert_equal(mad1, mad2)
+
+    # ensure that input masked array is not modified
+    assert np.isnan(data2[1])
+
+
 def test_median_absolute_deviation_multidim_axis():
     array = np.ones((5, 4, 3)) * np.arange(5)[:, np.newaxis, np.newaxis]
-    assert_equal(funcs.median_absolute_deviation(array, axis=(1, 2)),
-                 np.zeros(5))
-    assert_equal(funcs.median_absolute_deviation(
-        array, axis=np.array([1, 2])), np.zeros(5))
+    mad1 = funcs.median_absolute_deviation(array, axis=(1, 2))
+    mad2 = funcs.median_absolute_deviation(array, axis=(2, 1))
+    assert_equal(mad1, np.zeros(5))
+    assert_equal(mad1, mad2)
 
 
 def test_median_absolute_deviation_quantity():
@@ -125,13 +142,13 @@ def test_median_absolute_deviation_quantity():
 def test_binom_conf_interval():
 
     # Test Wilson and Jeffreys interval for corner cases:
-    # Corner cases: k = 0, k = n, conf = 0., conf = 1.
+    # Corner cases: k = 0, k = n, confidence_level = 0., confidence_level = 1.
     n = 5
     k = [0, 4, 5]
     for conf in [0., 0.5, 1.]:
-        res = funcs.binom_conf_interval(k, n, conf=conf, interval='wilson')
+        res = funcs.binom_conf_interval(k, n, confidence_level=conf, interval='wilson')
         assert ((res >= 0.) & (res <= 1.)).all()
-        res = funcs.binom_conf_interval(k, n, conf=conf, interval='jeffreys')
+        res = funcs.binom_conf_interval(k, n, confidence_level=conf, interval='jeffreys')
         assert ((res >= 0.) & (res <= 1.)).all()
 
     # Test Jeffreys interval accuracy against table in Brown et al. (2001).
@@ -139,27 +156,28 @@ def test_binom_conf_interval():
     k = [0, 1, 2, 3, 4]
     n = 7
     conf = 0.95
-    result = funcs.binom_conf_interval(k, n, conf=conf, interval='jeffreys')
+    result = funcs.binom_conf_interval(k, n, confidence_level=conf, interval='jeffreys')
     table = np.array([[0.000, 0.016, 0.065, 0.139, 0.234],
                       [0.292, 0.501, 0.648, 0.766, 0.861]])
     assert_allclose(result, table, atol=1.e-3, rtol=0.)
 
     # Test scalar version
-    result = np.array([funcs.binom_conf_interval(kval, n, conf=conf,
+    result = np.array([funcs.binom_conf_interval(kval, n, confidence_level=conf,
                                                  interval='jeffreys')
                        for kval in k]).transpose()
     assert_allclose(result, table, atol=1.e-3, rtol=0.)
 
     # Test flat
-    result = funcs.binom_conf_interval(k, n, conf=conf, interval='flat')
+    result = funcs.binom_conf_interval(k, n, confidence_level=conf, interval='flat')
     table = np.array([[0., 0.03185, 0.08523, 0.15701, 0.24486],
                       [0.36941, 0.52650, 0.65085, 0.75513, 0.84298]])
     assert_allclose(result, table, atol=1.e-3, rtol=0.)
 
     # Test scalar version
-    result = np.array([funcs.binom_conf_interval(kval, n, conf=conf,
-                                                 interval='flat')
-                       for kval in k]).transpose()
+    with pytest.warns(AstropyDeprecationWarning):
+        result = np.array([funcs.binom_conf_interval(kval, n, conf=conf,
+                                                     interval='flat')
+                           for kval in k]).transpose()
     assert_allclose(result, table, atol=1.e-3, rtol=0.)
 
     # Test Wald interval
@@ -167,7 +185,7 @@ def test_binom_conf_interval():
     assert_allclose(result, 0.)  # conf interval is [0, 0] when k = 0
     result = funcs.binom_conf_interval(5, 5, interval='wald')
     assert_allclose(result, 1.)  # conf interval is [1, 1] when k = n
-    result = funcs.binom_conf_interval(500, 1000, conf=0.68269,
+    result = funcs.binom_conf_interval(500, 1000, confidence_level=0.68269,
                                        interval='wald')
     assert_allclose(result[0], 0.5 - 0.5 / np.sqrt(1000.))
     assert_allclose(result[1], 0.5 + 0.5 / np.sqrt(1000.))
@@ -224,6 +242,12 @@ def test_binned_binom_proportion():
     bin_ctr, bin_hw, p, perr = funcs.binned_binom_proportion(x, success,
                                                              bins=nbins)
     assert (p == 0.).all()
+
+
+def test_binned_binom_proportion_exception():
+    with pytest.raises(ValueError):
+        with pytest.warns(AstropyDeprecationWarning):
+            funcs.binned_binom_proportion([0], [1, 2], conf=0.75)
 
 
 def test_signal_to_noise_oir_ccd():
@@ -334,12 +358,7 @@ def test_mad_std_scalar_return():
         with catch_warnings():
             rslt = funcs.mad_std(data)
             assert np.isscalar(rslt)
-            try:
-                assert not np.isnan(rslt)
-            # This might not be an issue anymore when only numpy>=1.13 is
-            # supported. NUMPY_LT_1_13 xref #7267
-            except AssertionError:
-                pytest.xfail('See #5232')
+            assert np.isnan(rslt)
 
 
 def test_mad_std_warns():
@@ -347,11 +366,12 @@ def test_mad_std_warns():
         data = np.random.normal(5, 2, size=(10, 10))
         data[5, 5] = np.nan
 
-        with catch_warnings() as warns:
+        with catch_warnings():
             rslt = funcs.mad_std(data, ignore_nan=False)
             assert np.isnan(rslt)
 
 
+@pytest.mark.filterwarnings('ignore:Invalid value encountered in median')
 def test_mad_std_withnan():
     with NumpyRNGContext(12345):
         data = np.empty([102, 102])
@@ -383,8 +403,10 @@ def test_mad_std_with_axis_and_nan():
                              2.22390333, np.nan])
     result_axis1 = np.array([1.48260222, 1.48260222])
 
-    assert_allclose(funcs.mad_std(data, axis=0, ignore_nan=True), result_axis0)
-    assert_allclose(funcs.mad_std(data, axis=1, ignore_nan=True), result_axis1)
+    with pytest.warns(RuntimeWarning,
+                      match=r'All-NaN slice encountered'):
+        assert_allclose(funcs.mad_std(data, axis=0, ignore_nan=True), result_axis0)
+        assert_allclose(funcs.mad_std(data, axis=1, ignore_nan=True), result_axis1)
 
 
 def test_mad_std_with_axis_and_nan_array_type():
@@ -392,7 +414,9 @@ def test_mad_std_with_axis_and_nan_array_type():
     data = np.array([[1, 2, 3, 4, np.nan],
                      [4, 3, 2, 1, np.nan]])
 
-    result = funcs.mad_std(data, axis=0, ignore_nan=True)
+    with pytest.warns(RuntimeWarning,
+                      match=r'All-NaN slice encountered'):
+        result = funcs.mad_std(data, axis=0, ignore_nan=True)
     assert not np.ma.isMaskedArray(result)
 
     data = np.ma.masked_where(np.isnan(data), data)
@@ -570,9 +594,23 @@ def test_scipy_poisson_limit():
     '''
     assert_allclose(funcs._scipy_kraft_burrows_nousek(5., 2.5, .99),
                     (0, 10.67), rtol=1e-3)
+    assert_allclose(funcs._scipy_kraft_burrows_nousek(5, 2.5, .99),
+                    (0, 10.67), rtol=1e-3)
+    assert_allclose(funcs._scipy_kraft_burrows_nousek(np.int32(5.), 2.5, .99),
+                    (0, 10.67), rtol=1e-3)
+    assert_allclose(funcs._scipy_kraft_burrows_nousek(np.int64(5.), 2.5, .99),
+                    (0, 10.67), rtol=1e-3)
+    assert_allclose(funcs._scipy_kraft_burrows_nousek(5., np.float32(2.5), .99),
+                    (0, 10.67), rtol=1e-3)
+    assert_allclose(funcs._scipy_kraft_burrows_nousek(5., np.float64(2.5), .99),
+                    (0, 10.67), rtol=1e-3)
+    assert_allclose(funcs._scipy_kraft_burrows_nousek(5., 2.5, np.float32(.99)),
+                    (0, 10.67), rtol=1e-3)
+    assert_allclose(funcs._scipy_kraft_burrows_nousek(5., 2.5, np.float64(.99)),
+                    (0, 10.67), rtol=1e-3)
     conf = funcs.poisson_conf_interval([5., 6.], 'kraft-burrows-nousek',
                                        background=[2.5, 2.],
-                                       conflevel=[.99, .9])
+                                       confidence_level=[.99, .9])
     assert_allclose(conf[:, 0], (0, 10.67), rtol=1e-3)
     assert_allclose(conf[:, 1], (0.81, 8.99), rtol=5e-3)
 
@@ -583,6 +621,24 @@ def test_mpmath_poisson_limit():
                     (0.81, 8.99), rtol=5e-3)
     assert_allclose(funcs._mpmath_kraft_burrows_nousek(5., 2.5, .99),
                     (0, 10.67), rtol=1e-3)
+    assert_allclose(funcs._mpmath_kraft_burrows_nousek(np.int32(6), 2., .9),
+                    (0.81, 8.99), rtol=5e-3)
+    assert_allclose(funcs._mpmath_kraft_burrows_nousek(np.int64(6), 2., .9),
+                    (0.81, 8.99), rtol=5e-3)
+    assert_allclose(funcs._mpmath_kraft_burrows_nousek(6., np.float32(2.), .9),
+                    (0.81, 8.99), rtol=5e-3)
+    assert_allclose(funcs._mpmath_kraft_burrows_nousek(6., np.float64(2.), .9),
+                    (0.81, 8.99), rtol=5e-3)
+    assert_allclose(funcs._mpmath_kraft_burrows_nousek(6., 2., np.float32(.9)),
+                    (0.81, 8.99), rtol=5e-3)
+    assert_allclose(funcs._mpmath_kraft_burrows_nousek(6., 2., np.float64(.9)),
+                    (0.81, 8.99), rtol=5e-3)
+    assert_allclose(funcs._mpmath_kraft_burrows_nousek(5., 2.5, .99),
+                    (0, 10.67), rtol=1e-3)
+
+    assert_allclose(funcs.poisson_conf_interval(
+        n=160, background=154.543,
+        confidence_level=.95, interval='kraft-burrows-nousek')[:, 0], (0, 30.30454909))
 
 
 @pytest.mark.skipif('not HAS_SCIPY')
@@ -597,8 +653,8 @@ def test_poisson_conf_value_errors():
 
     with pytest.raises(ValueError) as e:
         funcs.poisson_conf_interval([5, 6], 'sherpagehrels',
-                                    conflevel=[2.5, 2.])
-    assert 'conflevel not supported' in str(e.value)
+                                    confidence_level=[2.5, 2.])
+    assert 'confidence_level not supported' in str(e.value)
 
     with pytest.raises(ValueError) as e:
         funcs.poisson_conf_interval(1, 'foo')
@@ -610,26 +666,27 @@ def test_poisson_conf_kbn_value_errors():
     with pytest.raises(ValueError) as e:
         funcs.poisson_conf_interval(5., 'kraft-burrows-nousek',
                                     background=2.5,
-                                    conflevel=99)
+                                    confidence_level=99)
     assert 'number between 0 and 1' in str(e.value)
 
     with pytest.raises(ValueError) as e:
         funcs.poisson_conf_interval(5., 'kraft-burrows-nousek',
                                     background=2.5)
-    assert 'Set conflevel for method' in str(e.value)
+    assert 'Set confidence_level for method' in str(e.value)
 
     with pytest.raises(ValueError) as e:
         funcs.poisson_conf_interval(5., 'kraft-burrows-nousek',
                                     background=-2.5,
-                                    conflevel=.99)
+                                    confidence_level=.99)
     assert 'Background must be' in str(e.value)
 
 
 @pytest.mark.skipif('HAS_SCIPY or HAS_MPMATH')
 def test_poisson_limit_nodependencies():
     with pytest.raises(ImportError):
-        funcs.poisson_conf_interval(20., interval='kraft-burrows-nousek',
-                                    background=10., conflevel=.95)
+        with pytest.warns(AstropyDeprecationWarning):
+            funcs.poisson_conf_interval(20., interval='kraft-burrows-nousek',
+                                        background=10., conflevel=.95)
 
 
 @pytest.mark.skipif('not HAS_SCIPY')

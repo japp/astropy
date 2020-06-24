@@ -17,20 +17,9 @@ from numpy.testing import (assert_allclose, assert_array_equal,
 
 from astropy.tests.helper import catch_warnings, raises
 from astropy.utils import isiterable, minversion
-from astropy.utils.compat import NUMPY_LT_1_14
 from astropy.utils.exceptions import AstropyDeprecationWarning, AstropyWarning
 from astropy import units as u
 from astropy.units.quantity import _UNIT_NOT_INITIALISED
-
-try:
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    from distutils.version import LooseVersion
-    MATPLOTLIB_LT_15 = LooseVersion(matplotlib.__version__) < LooseVersion("1.5")
-    HAS_MATPLOTLIB = True
-except ImportError:
-    HAS_MATPLOTLIB = False
 
 
 """ The Quantity class will represent a number + unit + uncertainty """
@@ -229,6 +218,10 @@ class TestQuantityCreation:
         # check it works also when passing in a quantity
         q3 = u.Quantity(q1, u.m, ndmin=3)
         assert q3.ndim == 3 and q3.shape == (1, 1, 10)
+
+        # see github issue #10063
+        assert u.Quantity(u.Quantity(1, 'm'), 'm', ndmin=1).ndim == 1
+        assert u.Quantity(u.Quantity(1, 'cm'), 'm', ndmin=1).ndim == 1
 
     def test_non_quantity_with_unit(self):
         """Test that unit attributes in objects get recognized."""
@@ -886,12 +879,8 @@ class TestQuantityDisplay:
     def test_dimensionless_quantity_repr(self):
         q2 = u.Quantity(1., unit='m-1')
         q3 = u.Quantity(1, unit='m-1', dtype=int)
-        if NUMPY_LT_1_14:
-            assert repr(self.scalarintq * q2) == "<Quantity 1.0>"
-            assert repr(self.arrq * q2) == "<Quantity [ 1. , 2.3, 8.9]>"
-        else:
-            assert repr(self.scalarintq * q2) == "<Quantity 1.>"
-            assert repr(self.arrq * q2) == "<Quantity [1. , 2.3, 8.9]>"
+        assert repr(self.scalarintq * q2) == "<Quantity 1.>"
+        assert repr(self.arrq * q2) == "<Quantity [1. , 2.3, 8.9]>"
         assert repr(self.scalarintq * q3) == "<Quantity 1>"
 
     def test_dimensionless_quantity_str(self):
@@ -899,10 +888,7 @@ class TestQuantityDisplay:
         q3 = u.Quantity(1, unit='m-1', dtype=int)
         assert str(self.scalarintq * q2) == "1.0"
         assert str(self.scalarintq * q3) == "1"
-        if NUMPY_LT_1_14:
-            assert str(self.arrq * q2) == "[ 1.   2.3  8.9]"
-        else:
-            assert str(self.arrq * q2) == "[1.  2.3 8.9]"
+        assert str(self.arrq * q2) == "[1.  2.3 8.9]"
 
     def test_dimensionless_quantity_format(self):
         q1 = u.Quantity(3.14)
@@ -917,16 +903,10 @@ class TestQuantityDisplay:
         assert repr(self.scalarfloatq) == "<Quantity 1.3 m>"
 
     def test_array_quantity_str(self):
-        if NUMPY_LT_1_14:
-            assert str(self.arrq) == "[ 1.   2.3  8.9] m"
-        else:
-            assert str(self.arrq) == "[1.  2.3 8.9] m"
+        assert str(self.arrq) == "[1.  2.3 8.9] m"
 
     def test_array_quantity_repr(self):
-        if NUMPY_LT_1_14:
-            assert repr(self.arrq) == "<Quantity [ 1. , 2.3, 8.9] m>"
-        else:
-            assert repr(self.arrq) == "<Quantity [1. , 2.3, 8.9] m>"
+        assert repr(self.arrq) == "<Quantity [1. , 2.3, 8.9] m>"
 
     def test_scalar_quantity_format(self):
         assert format(self.scalarintq, '02d') == "01 m"
@@ -1420,6 +1400,20 @@ def test_quantity_from_table():
     assert qbp.unit == u.pc
     assert_array_equal(qbp.value, t['b'])
 
+    # Also check with a function unit (regression test for gh-8430)
+    t['a'].unit = u.dex(u.cm/u.s**2)
+    fq = u.Dex(t['a'])
+    assert fq.unit == u.dex(u.cm/u.s**2)
+    assert_array_equal(fq.value, t['a'])
+
+    fq2 = u.Quantity(t['a'], subok=True)
+    assert isinstance(fq2, u.Dex)
+    assert fq2.unit == u.dex(u.cm/u.s**2)
+    assert_array_equal(fq2.value, t['a'])
+
+    with pytest.raises(u.UnitTypeError):
+        u.Quantity(t['a'])
+
 
 def test_assign_slice_with_quantity_like():
     # Regression tests for gh-5961
@@ -1491,12 +1485,8 @@ def test_repr_array_of_quantity():
     """
 
     a = np.array([1 * u.m, 2 * u.s], dtype=object)
-    if NUMPY_LT_1_14:
-        assert repr(a) == 'array([<Quantity 1.0 m>, <Quantity 2.0 s>], dtype=object)'
-        assert str(a) == '[<Quantity 1.0 m> <Quantity 2.0 s>]'
-    else:
-        assert repr(a) == 'array([<Quantity 1. m>, <Quantity 2. s>], dtype=object)'
-        assert str(a) == '[<Quantity 1. m> <Quantity 2. s>]'
+    assert repr(a) == 'array([<Quantity 1. m>, <Quantity 2. s>], dtype=object)'
+    assert str(a) == '[<Quantity 1. m> <Quantity 2. s>]'
 
 
 class TestSpecificTypeQuantity:
@@ -1607,3 +1597,26 @@ class TestQuantityMimics:
         q[8:] = mimic
         assert np.all(q[:8].value == np.arange(8.))
         assert np.all(q[8:].value == [100., 200.])
+
+    def test_mimic_function_unit(self):
+        mimic = QuantityMimic([1., 2.], u.dex(u.cm/u.s**2))
+        d = u.Dex(mimic)
+        assert isinstance(d, u.Dex)
+        assert d.unit == u.dex(u.cm/u.s**2)
+        assert np.all(d.value == [1., 2.])
+        q = u.Quantity(mimic, subok=True)
+        assert isinstance(q, u.Dex)
+        assert q.unit == u.dex(u.cm/u.s**2)
+        assert np.all(q.value == [1., 2.])
+        with pytest.raises(u.UnitTypeError):
+            u.Quantity(mimic)
+
+
+def test_masked_quantity_str_repr():
+    """Ensure we don't break masked Quantity representation."""
+    # Really, masked quantities do not work well, but at least let the
+    # basics work.
+    masked_quantity = np.ma.array([1, 2, 3, 4] * u.kg,
+                                  mask=[True, False, True, False])
+    str(masked_quantity)
+    repr(masked_quantity)

@@ -1,7 +1,5 @@
 # Licensed under a 3-clause BSD style license - see PYFITS.rst
 
-
-import bz2
 import gzip
 import itertools
 import os
@@ -17,12 +15,21 @@ from .groups import GroupsHDU
 from .image import PrimaryHDU, ImageHDU
 from astropy.io.fits.file import _File, FILE_MODES
 from astropy.io.fits.header import _pad_length
-from astropy.io.fits.util import (_is_int, _tmp_name, fileobj_closed, ignore_sigint,
-                    _get_array_mmap, _free_space_check, fileobj_mode, isfile)
+from astropy.io.fits.util import (_free_space_check, _get_array_mmap, _is_int,
+                                  _tmp_name, fileobj_closed, fileobj_mode,
+                                  ignore_sigint, isfile)
 from astropy.io.fits.verify import _Verify, _ErrList, VerifyError, VerifyWarning
 from astropy.utils import indent
 from astropy.utils.exceptions import AstropyUserWarning
 from astropy.utils.decorators import deprecated_renamed_argument
+
+# NOTE: Python can be built without bz2.
+try:
+    import bz2
+except ImportError:
+    HAS_BZ2 = False
+else:
+    HAS_BZ2 = True
 
 
 def fitsopen(name, mode='readonly', memmap=None, save_backup=False,
@@ -120,6 +127,13 @@ def fitsopen(name, mode='readonly', memmap=None, save_backup=False,
         back to integer values after performing floating point operations on
         the data. Default is `False`.
 
+    output_verify : str
+        Output verification option.  Must be one of ``"fix"``,
+        ``"silentfix"``, ``"ignore"``, ``"warn"``, or
+        ``"exception"``.  May also be any combination of ``"fix"`` or
+        ``"silentfix"`` with ``"+ignore"``, ``+warn``, or ``+exception"
+        (e.g. ``"fix+warn"``).  See :ref:`verify` for more info.
+
     Returns
     -------
         hdulist : an `HDUList` object
@@ -179,8 +193,6 @@ class HDUList(list, _Verify):
         else:
             self._file = file
             self._data = None
-
-        self._save_backup = False
 
         # For internal use only--the keyword args passed to fitsopen /
         # HDUList.fromfile/string when opening the file
@@ -342,7 +354,7 @@ class HDUList(list, _Verify):
             self._try_while_unread_hdus(super().__setitem__, _key, hdu)
         except IndexError:
             raise IndexError('Extension {} is out of bound or not found.'
-                            .format(key))
+                             .format(key))
 
         self._resize = True
         self._truncate = False
@@ -371,7 +383,8 @@ class HDUList(list, _Verify):
         return self
 
     def __exit__(self, type, value, traceback):
-        self.close()
+        output_verify = self._open_kwargs.get('output_verify', 'exception')
+        self.close(output_verify=output_verify)
 
     @classmethod
     def fromfile(cls, fileobj, mode=None, memmap=None,
@@ -727,7 +740,7 @@ class HDUList(list, _Verify):
                 name = name.strip().upper()
             # 'PRIMARY' should always work as a reference to the first HDU
             if ((name == _key or (_key == 'PRIMARY' and idx == 0)) and
-                (_ver is None or _ver == hdu.ver)):
+                    (_ver is None or _ver == hdu.ver)):
                 found = idx
                 break
 
@@ -790,10 +803,11 @@ class HDUList(list, _Verify):
 
         if self._file.mode not in ('append', 'update', 'ostream'):
             warnings.warn("Flush for '{}' mode is not supported."
-                         .format(self._file.mode), AstropyUserWarning)
+                          .format(self._file.mode), AstropyUserWarning)
             return
 
-        if self._save_backup and self._file.mode in ('append', 'update'):
+        save_backup = self._open_kwargs.get('save_backup', False)
+        if save_backup and self._file.mode in ('append', 'update'):
             filename = self._file.name
             if os.path.exists(filename):
                 # The the file doesn't actually exist anymore for some reason
@@ -1024,9 +1038,8 @@ class HDUList(list, _Verify):
         return None
 
     @classmethod
-    def _readfrom(cls, fileobj=None, data=None, mode=None,
-                  memmap=None, save_backup=False, cache=True,
-                  lazy_load_hdus=True, **kwargs):
+    def _readfrom(cls, fileobj=None, data=None, mode=None, memmap=None,
+                  cache=True, lazy_load_hdus=True, **kwargs):
         """
         Provides the implementations from HDUList.fromfile and
         HDUList.fromstring, both of which wrap this method, as their
@@ -1052,7 +1065,7 @@ class HDUList(list, _Verify):
             # fromstring case; the data type of ``data`` will be checked in the
             # _BaseHDU.fromstring call.
 
-        hdulist._save_backup = save_backup
+        # Store additional keyword args that were passed to fits.open
         hdulist._open_kwargs = kwargs
 
         if fileobj is not None and fileobj.writeonly:
@@ -1072,7 +1085,7 @@ class HDUList(list, _Verify):
 
             raise OSError('Empty or corrupt FITS file')
 
-        if not lazy_load_hdus:
+        if not lazy_load_hdus or kwargs.get('checksum') is True:
             # Go ahead and load all HDUs
             while hdulist._read_next_hdu():
                 pass
@@ -1121,7 +1134,7 @@ class HDUList(list, _Verify):
             self._in_read_next_hdu = True
 
             if ('disable_image_compression' in kwargs and
-                kwargs['disable_image_compression']):
+                    kwargs['disable_image_compression']):
                 compressed.COMPRESSION_ENABLED = False
 
             # read all HDUs
@@ -1279,6 +1292,9 @@ class HDUList(list, _Verify):
             if self._file.compression == 'gzip':
                 new_file = gzip.GzipFile(name, mode='ab+')
             elif self._file.compression == 'bzip2':
+                if not HAS_BZ2:
+                    raise ModuleNotFoundError(
+                        "This Python installation does not provide the bz2 module.")
                 new_file = bz2.BZ2File(name, mode='w')
             else:
                 new_file = name
@@ -1338,7 +1354,10 @@ class HDUList(list, _Verify):
                 # flushing (on Windows--again, this is no problem on Linux).
                 for idx, mmap, arr in mmaps:
                     if mmap is not None:
-                        arr.data = self[idx].data.data
+                        # https://github.com/numpy/numpy/issues/8628
+                        with warnings.catch_warnings():
+                            warnings.simplefilter('ignore', category=DeprecationWarning)
+                            arr.data = self[idx].data.data
                 del mmaps  # Just to be sure
 
         else:

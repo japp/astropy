@@ -153,6 +153,18 @@ ap_order = """
 ``int`` (read-only) Order of the polynomial (``AP_ORDER``).
 """
 
+aux = """
+`~astropy.wcs.Auxprm` Auxiliary coordinate system information of a specialist nature.
+"""
+
+Auxprm = """
+Class that contains auxiliary coordinate system information of a specialist
+nature.
+
+This class can not be constructed directly from Python, but instead is
+returned from `~astropy.wcs.Wcsprm.aux`.
+"""
+
 axis_types = """
 ``int array[naxis]`` An array of four-digit type codes for each axis.
 
@@ -423,6 +435,11 @@ crder = """
 An undefined value is represented by NaN.
 """
 
+crln_obs = """
+``double`` Carrington heliographic longitude of the observer (deg). If
+undefined, this is set to `None`.
+"""
+
 crota = """
 ``double array[naxis]`` ``CROTAia`` keyvalues for each coordinate
 axis.
@@ -655,6 +672,11 @@ cdelt : 2-tuple
     The grid step size
 """
 
+dsun_obs = """
+``double`` Distance between the centre of the Sun and the observer (m). If
+undefined, this is set to `None`.
+"""
+
 equinox = """
 ``double`` The equinox associated with dynamical equatorial or
 ecliptic coordinate systems.
@@ -666,15 +688,11 @@ An undefined value is represented by NaN.
 """
 
 extlev = """
-``int`` (read-only)
-
-``EXTLEV`` identifying the binary table extension.
+``int`` (read-only) ``EXTLEV`` identifying the binary table extension.
 """
 
 extnam = """
-``str`` (read-only)
-
-``EXTNAME`` identifying the binary table extension.
+``str`` (read-only) ``EXTNAME`` identifying the binary table extension.
 """
 
 extrema = """
@@ -693,9 +711,7 @@ speed up table searches.
 """
 
 extver = """
-``int`` (read-only)
-
-``EXTVER`` identifying the binary table extension.
+``int`` (read-only) ``EXTVER`` identifying the binary table extension.
 """
 
 find_all_wcs = """
@@ -962,10 +978,18 @@ Alias for `~astropy.wcs.Wcsprm.has_pc`.  Maintained for backward
 compatibility.
 """
 
-i = """
-``int`` (read-only)
+hgln_obs = """
+``double`` Stonyhurst heliographic longitude of the observer. If
+undefined, this is set to `None`.
+"""
 
-Image axis number.
+hglt_obs = """
+``double``  Heliographic latitude (Carrington or Stonyhurst) of the observer
+(deg). If undefined, this is set to `None`.
+"""
+
+i = """
+``int`` (read-only) Image axis number.
 """
 
 imgpix_matrix = """
@@ -992,9 +1016,9 @@ the coordinate array and of each indexing vector.
 """
 
 kind = """
-``str`` (read-only)
+``str`` (read-only) ``wcstab`` array type.
 
-Character identifying the wcstab array type:
+Character identifying the ``wcstab`` array type:
 
     - ``'c'``: coordinate array,
     - ``'i'``: index vector.
@@ -1041,9 +1065,7 @@ M = """
 """
 
 m = """
-``int`` (read-only)
-
-Array axis number for index vectors.
+``int`` (read-only) ``wcstab`` axis number for index vectors.
 """
 
 map = """
@@ -1268,9 +1290,7 @@ product K_1 * K_2 * ... * K_M.
 """
 
 ndim = """
-``int`` (read-only)
-
-Expected dimensionality of the wcstab array.
+``int`` (read-only) Expected dimensionality of the ``wcstab`` array.
 """
 
 obsgeo = """
@@ -1486,6 +1506,16 @@ removed in the future.
 To get a string of the contents, use `repr`.
 """
 
+print_contents_wtbarr = """
+print_contents()
+
+Print the contents of the `~astropy.wcs.Wtbarr` object to
+stdout. Probably only useful for debugging purposes, and may be
+removed in the future.
+
+To get a string of the contents, use `repr`.
+"""
+
 radesys = """
 ``string`` The equatorial or ecliptic coordinate system type,
 ``RADESYSa``.
@@ -1504,9 +1534,12 @@ An undefined value is represented by NaN.
 """
 
 row = """
-``int`` (read-only)
+``int`` (read-only) Table row number.
+"""
 
-Table row number.
+rsun_ref = """
+``double`` Reference radius of the Sun used in coordinate calculations (m).
+If undefined, this is set to `None`.
 """
 
 s2p = """
@@ -2081,9 +2114,7 @@ header : str
 """
 
 ttype = """
-``str`` (read-only)
-
-``TTYPEn`` identifying the column of the binary table that contains
+``str`` (read-only) ``TTYPEn`` identifying the column of the binary table that contains
 the wcstab array.
 """
 
@@ -2254,6 +2285,11 @@ ValueError
 
 KeyError
      Key not found in FITS header.
+"""
+
+wtb = """
+``list of Wtbarr`` objects to construct coordinate lookup tables from BINTABLE.
+
 """
 
 Wtbarr = """

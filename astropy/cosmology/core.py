@@ -1,6 +1,5 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-
 import sys
 from math import acos, sin, cos, sqrt, pi, exp, log, floor
 from abc import ABCMeta, abstractmethod
@@ -28,7 +27,7 @@ __all__ = ["FLRW", "LambdaCDM", "FlatLambdaCDM", "wCDM", "FlatwCDM",
            "Flatw0waCDM", "w0waCDM", "wpwaCDM", "w0wzCDM",
            "default_cosmology"] + parameters.available
 
-__doctest_requires__ = {'*': ['scipy.integrate', 'scipy.special']}
+__doctest_requires__ = {'*': ['scipy']}
 
 # Notes about speeding up integrals:
 # ---------------------------------
@@ -476,7 +475,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -501,7 +500,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -525,7 +524,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -551,7 +550,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -584,7 +583,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -609,7 +608,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -635,7 +634,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -654,7 +653,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -682,7 +681,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -700,7 +699,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -798,7 +797,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -848,7 +847,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -882,7 +881,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -930,7 +929,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : float or array-like
+        z : float or array_like
           Input redshift.
 
         Returns
@@ -1000,7 +999,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -1018,7 +1017,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -1040,7 +1039,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar
 
         Returns
@@ -1062,7 +1061,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar
 
         Returns
@@ -1080,7 +1079,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar
 
         Returns
@@ -1101,7 +1100,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar
 
         Returns
@@ -1116,7 +1115,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1137,7 +1136,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1154,7 +1153,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1176,7 +1175,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -1197,7 +1196,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1218,7 +1217,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z1, z2 : array-like, shape (N,)
+        z1, z2 : array_like, shape (N,)
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1238,7 +1237,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z1, z2 : array-like, shape (N,)
+        z1, z2 : array_like, shape (N,)
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1262,7 +1261,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1289,7 +1288,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z1, z2 : array-like, shape (N,)
+        z1, z2 : array_like, shape (N,)
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1327,7 +1326,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1350,7 +1349,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1378,7 +1377,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z1, z2 : array-like, shape (N,)
+        z1, z2 : array_like, shape (N,)
           Input redshifts. z2 must be large than z1.
 
         Returns
@@ -1402,7 +1401,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1428,7 +1427,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1458,7 +1457,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1494,7 +1493,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -1503,10 +1502,8 @@ class FLRW(Cosmology, metaclass=ABCMeta):
           Differential comoving volume per redshift per steradian at
           each input redshift."""
         dh = self._hubble_distance
-        da = self.angular_diameter_distance(z)
-        zp1 = 1.0 + z
-        return dh * ((zp1 * da) ** 2.0) / u.Quantity(self.efunc(z),
-                                                          u.steradian)
+        dm = self.comoving_transverse_distance(z)
+        return dh * (dm ** 2.0) / u.Quantity(self.efunc(z), u.steradian)
 
     def kpc_comoving_per_arcmin(self, z):
         """ Separation in transverse comoving kpc corresponding to an
@@ -1514,7 +1511,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1532,7 +1529,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1550,7 +1547,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1568,7 +1565,7 @@ class FLRW(Cosmology, metaclass=ABCMeta):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1690,7 +1687,7 @@ class LambdaCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -1717,7 +1714,7 @@ class LambdaCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -1745,14 +1742,13 @@ class LambdaCDM(FLRW):
 
         For Omega_rad = 0 the comoving distance can be directly calculated
         as an elliptic integral.
-        Equation here taken from
-            Kantowski, Kao, and Thomas, arXiv:0002334
+        Equation here taken from Kantowski, Kao, and Thomas, arXiv:0002334
 
         Not valid or appropriate for flat cosmologies (Ok0=0).
 
         Parameters
         ----------
-        z1, z2 : array-like
+        z1, z2 : array_like
           Input redshifts.
 
         Returns
@@ -1824,7 +1820,7 @@ class LambdaCDM(FLRW):
 
         Parameters
         ----------
-        z1, z2 : array-like, shape (N,)
+        z1, z2 : array_like, shape (N,)
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1853,7 +1849,7 @@ class LambdaCDM(FLRW):
 
         Parameters
         ----------
-        z1, z2 : array-like, shape (N,)
+        z1, z2 : array_like, shape (N,)
           Input redshifts.  Must be 1D or scalar.
 
         Returns
@@ -1881,12 +1877,12 @@ class LambdaCDM(FLRW):
 
         For Omega_radiation = 0 the comoving distance can be directly calculated
         as a hypergeometric function.
-        Equation here taken from
-            Baes, Camps, Van De Putte, 2017, MNRAS, 468, 927.
+
+        Equation here taken from Baes, Camps, Van De Putte, 2017, MNRAS, 468, 927.
 
         Parameters
         ----------
-        z1, z2 : array-like
+        z1, z2 : array_like
           Input redshifts.
 
         Returns
@@ -1914,8 +1910,7 @@ class LambdaCDM(FLRW):
 
         Note:
         The scipy.special.hyp2f1 code already implements the hypergeometric
-        transformation suggested by
-            Baes, Camps, Van De Putte, 2017, MNRAS, 468, 927.
+        transformation suggested by Baes, Camps, Van De Putte, 2017, MNRAS, 468, 927.
         for use in actual numerical evaulations.
 
         """
@@ -1929,7 +1924,7 @@ class LambdaCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -1944,12 +1939,11 @@ class LambdaCDM(FLRW):
 
         For Omega_radiation = 0 (T_CMB = 0; massless neutrinos)
         the age can be directly calculated as an elliptic integral.
-        See, e.g.,
-            Thomas and Kantowski, arXiv:0003463
+        See, e.g., Thomas and Kantowski, arXiv:0003463
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -1967,12 +1961,11 @@ class LambdaCDM(FLRW):
 
         For Omega_radiation = 0 (T_CMB = 0; massless neutrinos)
         the age can be directly calculated as an elliptic integral.
-        See, e.g.,
-            Thomas and Kantowski, arXiv:0003463
+        See, e.g., Thomas and Kantowski, arXiv:0003463
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2003,7 +1996,7 @@ class LambdaCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar
 
         Returns
@@ -2026,7 +2019,7 @@ class LambdaCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2051,7 +2044,7 @@ class LambdaCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.  Must be 1D or scalar
 
         Returns
@@ -2066,7 +2059,7 @@ class LambdaCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2098,7 +2091,7 @@ class LambdaCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2207,7 +2200,7 @@ class FlatLambdaCDM(LambdaCDM):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2239,7 +2232,7 @@ class FlatLambdaCDM(LambdaCDM):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2365,7 +2358,7 @@ class wCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2392,7 +2385,7 @@ class wCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2416,7 +2409,7 @@ class wCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2446,7 +2439,7 @@ class wCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2567,7 +2560,7 @@ class FlatwCDM(wCDM):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2597,7 +2590,7 @@ class FlatwCDM(wCDM):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2736,7 +2729,7 @@ class w0waCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -2763,7 +2756,7 @@ class w0waCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -3018,7 +3011,7 @@ class wpwaCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -3047,7 +3040,7 @@ class wpwaCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -3194,7 +3187,7 @@ class w0wzCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -3221,7 +3214,7 @@ class w0wzCDM(FLRW):
 
         Parameters
         ----------
-        z : array-like
+        z : array_like
           Input redshifts.
 
         Returns
@@ -3332,11 +3325,13 @@ class default_cosmology(ScienceState):
         >>> from astropy.cosmology import default_cosmology, WMAP7
         >>> with default_cosmology.set(WMAP7):
         ...     # WMAP7 cosmology in effect
+        ...     pass
 
     Or, you may use a string::
 
         >>> with default_cosmology.set('WMAP7'):
         ...     # WMAP7 cosmology in effect
+        ...     pass
     """
     _value = 'Planck15'
 

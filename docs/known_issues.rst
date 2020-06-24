@@ -150,7 +150,8 @@ Quantities Float Comparison with np.isclose Fails
 -------------------------------------------------
 
 Comparing Quantities floats using the NumPy function `~numpy.isclose` fails on
-NumPy 1.9 as the comparison between ``a`` and ``b`` is made using the formula
+NumPy versions before 1.17 as the comparison between ``a`` and ``b``
+is made using the formula
 
 .. math::
 
@@ -160,14 +161,14 @@ This will result in the following traceback when using this with Quantities::
 
     >>> from astropy import units as u, constants as const
     >>> import numpy as np
-    >>> np.isclose(500 * u.km/u.s, 300 * u.km / u.s)  # doctest: +IGNORE_EXCEPTION_DETAIL
+    >>> np.isclose(500 * u.km/u.s, 300 * u.km / u.s)  # doctest: +SKIP
     Traceback (most recent call last):
     ...
     UnitConversionError: Can only apply 'add' function to dimensionless quantities when other argument is not a quantity (unless the latter is all zero/infinity/nan)
 
-One solution is::
+If one cannot upgrade to numpy 1.17 or later, one solution is::
 
-    >>> np.isclose(500 * u.km/u.s, 300 * u.km / u.s, atol=1e-8 * u.mm / u.s) # doctest: +SKIP
+    >>> np.isclose(500 * u.km/u.s, 300 * u.km / u.s, atol=1e-8 * u.mm / u.s)
     False
 
 Quantities in np.linspace Failure on NumPy 1.10
@@ -208,7 +209,7 @@ supported in the basic Python command-line interpreter on Windows.
 ``numpy.int64`` does not decompose input ``Quantity`` objects
 -------------------------------------------------------------
 
-Python's ``int()`` (and therefore ``numpy.int``) goes through ``__index__``
+Python's ``int()`` goes through ``__index__``
 while ``numpy.int64`` or ``numpy.int_`` do not go through ``__index__``. This
 means that an upstream fix in ``numpy` is required in order for
 ``astropy.units`` to control decomposing the input in these functions::
@@ -217,13 +218,23 @@ means that an upstream fix in ``numpy` is required in order for
     1
     >>> np.int_((15 * u.km) / (15 * u.imperial.foot))
     1
-    >>> np.int((15 * u.km) / (15 * u.imperial.foot))
-    3280
     >>> int((15 * u.km) / (15 * u.imperial.foot))
     3280
 
 To convert a dimensionless `~astropy.units.Quantity` to an integer, it is
 therefore recommended to use ``int(...)``.
+
+Inconsistent behavior when converting complex numbers to floats
+---------------------------------------------------------------
+
+Attempting to use `float` or NumPy's ``numpy.float`` on a standard
+complex number (e.g., ``5 + 6j``) results in a `TypeError`.  In
+contrast, using `float` or ``numpy.float`` on a complex number from
+NumPy (e.g., ``numpy.complex128``) drops the imaginary component and
+issues a ``numpy.ComplexWarning``.  This inconsistency persists between
+`~astropy.units.Quantity` instances based on standard and NumPy
+complex numbers.  To get the real part of a complex number, it is
+recommended to use ``numpy.real``.
 
 Build/Installation/Test Issues
 ==============================
@@ -355,7 +366,7 @@ by adding the following to your ``sitecustomize.py`` file::
     sys.setdefaultencoding('utf-8')
 
 Note that in general, `this is not recommended
-<https://ziade.org/2008/01/08/syssetdefaultencoding-is-evil/>`_,
+<https://stackoverflow.com/questions/3828723/why-should-we-not-use-sys-setdefaultencodingutf-8-in-a-py-script>`_,
 because it can hide other Unicode encoding bugs in your application.
 However, if your application does not deal with text
 processing and you just want docstrings to work, this may be
@@ -382,7 +393,7 @@ There is an unrelated issue that also affects more recent versions of
 cause issues when collecting tests — in this case, the symptom is that the
 test collection hangs and/or appears to run the tests recursively. If you are
 maintaining a package that was created using the Astropy
-`package template <http://github.com/astropy/package-template>`_, then
+`package template <https://github.com/astropy/package-template>`_, then
 this can be fixed by updating to the latest version of the ``_astropy_init.py``
 file. The root cause of this issue is that pytest now tries to pick up the
 top-level ``test()`` function as a test, so we need to make sure that we set a

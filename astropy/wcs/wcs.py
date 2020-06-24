@@ -1,36 +1,35 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-"""
-Under the hood, there are 3 separate classes that perform different
-parts of the transformation:
 
-   - `~astropy.wcs.Wcsprm`: Is a direct wrapper of the core WCS
-     functionality in `wcslib`_.  (This includes TPV and TPD
-     polynomial distortion, but not SIP distortion).
-
-   - `~astropy.wcs.Sip`: Handles polynomial distortion as defined in the
-     `SIP`_ convention.
-
-   - `~astropy.wcs.DistortionLookupTable`: Handles `distortion paper`_
-     lookup tables.
-
-Additionally, the class `WCS` aggregates all of these transformations
-together in a pipeline:
-
-   - Detector to image plane correction (by a pair of
-     `~astropy.wcs.DistortionLookupTable` objects).
-
-   - `SIP`_ distortion correction (by an underlying `~astropy.wcs.Sip`
-     object)
-
-   - `distortion paper`_ table-lookup correction (by a pair of
-     `~astropy.wcs.DistortionLookupTable` objects).
-
-   - `wcslib`_ WCS transformation (by a `~astropy.wcs.Wcsprm` object)
-
-"""
+# Under the hood, there are 3 separate classes that perform different
+# parts of the transformation:
+#
+#    - `~astropy.wcs.Wcsprm`: Is a direct wrapper of the core WCS
+#      functionality in `wcslib`_.  (This includes TPV and TPD
+#      polynomial distortion, but not SIP distortion).
+#
+#    - `~astropy.wcs.Sip`: Handles polynomial distortion as defined in the
+#      `SIP`_ convention.
+#
+#    - `~astropy.wcs.DistortionLookupTable`: Handles `distortion paper`_
+#      lookup tables.
+#
+# Additionally, the class `WCS` aggregates all of these transformations
+# together in a pipeline:
+#
+#    - Detector to image plane correction (by a pair of
+#      `~astropy.wcs.DistortionLookupTable` objects).
+#
+#    - `SIP`_ distortion correction (by an underlying `~astropy.wcs.Sip`
+#      object)
+#
+#    - `distortion paper`_ table-lookup correction (by a pair of
+#      `~astropy.wcs.DistortionLookupTable` objects).
+#
+#    - `wcslib`_ WCS transformation (by a `~astropy.wcs.Wcsprm` object)
 
 # STDLIB
 import copy
+import uuid
 import io
 import itertools
 import os
@@ -56,8 +55,8 @@ from astropy.utils.exceptions import AstropyWarning, AstropyUserWarning, Astropy
 from .wcsapi.fitswcs import FITSWCSAPIMixin, SlicedFITSWCS
 
 __all__ = ['FITSFixedWarning', 'WCS', 'find_all_wcs',
-           'DistortionLookupTable', 'Sip', 'Tabprm', 'Wcsprm',
-           'WCSBase', 'validate', 'WcsError', 'SingularMatrixError',
+           'DistortionLookupTable', 'Sip', 'Tabprm', 'Wcsprm', 'Auxprm',
+           'Wtbarr', 'WCSBase', 'validate', 'WcsError', 'SingularMatrixError',
            'InconsistentAxisTypesError', 'InvalidTransformError',
            'InvalidCoordinateError', 'NoSolutionError',
            'InvalidSubimageSpecificationError', 'NoConvergence',
@@ -67,10 +66,6 @@ __all__ = ['FITSFixedWarning', 'WCS', 'find_all_wcs',
 
 __doctest_skip__ = ['WCS.all_world2pix']
 
-NAXIS_DEPRECATE_MESSAGE = """
-Private attributes "_naxis1" and "_naxis2" have been deprecated since v3.1.
-Instead use the "pixel_shape" property which returns a list of NAXISj keyword values.
-"""
 
 if _wcs is not None:
     _parsed_version = _wcs.__version__.split('.')
@@ -89,7 +84,9 @@ if _wcs is not None:
     DistortionLookupTable = _wcs.DistortionLookupTable
     Sip = _wcs.Sip
     Wcsprm = _wcs.Wcsprm
+    Auxprm = _wcs.Auxprm
     Tabprm = _wcs.Tabprm
+    Wtbarr = _wcs.Wtbarr
     WcsError = _wcs.WcsError
     SingularMatrixError = _wcs.SingularMatrixError
     InconsistentAxisTypesError = _wcs.InconsistentAxisTypesError
@@ -106,12 +103,28 @@ if _wcs is not None:
         if key.startswith(('WCSSUB', 'WCSHDR', 'WCSHDO')):
             locals()[key] = val
             __all__.append(key)
+
+    # Set coordinate extraction callback for WCS -TAB:
+    def _load_tab_bintable(hdulist, extnam, extver, extlev, kind, ttype, row, ndim):
+        arr = hdulist[(extnam, extver)].data[ttype][row - 1]
+
+        if arr.ndim != ndim:
+            if kind == 'c' and ndim == 2:
+                arr = arr.reshape((arr.size, 1))
+            else:
+                raise ValueError("Bad TDIM")
+
+        return np.ascontiguousarray(arr, dtype=np.double)
+
+    _wcs.set_wtbarr_fitsio_callback(_load_tab_bintable)
+
 else:
     WCSBase = object
     Wcsprm = object
     DistortionLookupTable = object
     Sip = object
     Tabprm = object
+    Wtbarr = object
     WcsError = None
     SingularMatrixError = None
     InconsistentAxisTypesError = None
@@ -420,6 +433,10 @@ class WCS(FITSWCSAPIMixin, WCSBase):
                 header_bytes = header_string
                 header_string = header_string.decode('ascii')
 
+            if not (fobj is None or isinstance(fobj, fits.HDUList)):
+                raise AssertionError("'fobj' must be either None or an "
+                                     "astropy.io.fits.HDUList object.")
+
             try:
                 tmp_header = fits.Header.fromstring(header_string)
                 self._remove_sip_kw(tmp_header)
@@ -428,7 +445,8 @@ class WCS(FITSWCSAPIMixin, WCSBase):
                     tmp_header_bytes = tmp_header_bytes.encode('ascii')
                 tmp_wcsprm = _wcs.Wcsprm(header=tmp_header_bytes, key=key,
                                          relax=relax, keysel=keysel_flags,
-                                         colsel=colsel, warnings=False)
+                                         colsel=colsel, warnings=False,
+                                         hdulist=fobj)
             except _wcs.NoWcsKeywordsFoundError:
                 est_naxis = 0
             else:
@@ -466,7 +484,7 @@ class WCS(FITSWCSAPIMixin, WCSBase):
             try:
                 wcsprm = _wcs.Wcsprm(header=header_bytes, key=key,
                                      relax=relax, keysel=keysel_flags,
-                                     colsel=colsel)
+                                     colsel=colsel, hdulist=fobj)
             except _wcs.NoWcsKeywordsFoundError:
                 # The header may have SIP or distortions, but no core
                 # WCS.  That isn't an error -- we want a "default"
@@ -474,7 +492,7 @@ class WCS(FITSWCSAPIMixin, WCSBase):
                 if colsel is None:
                     wcsprm = _wcs.Wcsprm(header=None, key=key,
                                          relax=relax, keysel=keysel_flags,
-                                         colsel=colsel)
+                                         colsel=colsel, hdulist=fobj)
                 else:
                     raise
 
@@ -504,7 +522,12 @@ reduce these to 2 dimensions using the naxis kwarg.
         WCSBase.__init__(self, sip, cpdis, wcsprm, det2im)
 
         if fix:
-            self.fix(translate_units=translate_units)
+            if header is None:
+                with warnings.catch_warnings():
+                    warnings.simplefilter('ignore', FITSFixedWarning)
+                    self.fix(translate_units=translate_units)
+            else:
+                self.fix(translate_units=translate_units)
 
         if _do_set:
             self.wcs.set()
@@ -561,10 +584,35 @@ reduce these to 2 dimensions using the naxis kwarg.
         return copy.deepcopy(self)
 
     def sub(self, axes=None):
+
         copy = self.deepcopy()
-        copy.wcs = self.wcs.sub(axes)
+
+        # We need to know which axes have been dropped, but there is no easy
+        # way to do this with the .sub function, so instead we assign UUIDs to
+        # the CNAME parameters in copy.wcs. We can later access the original
+        # CNAME properties from self.wcs.
+        cname_uuid = [str(uuid.uuid4()) for i in range(copy.wcs.naxis)]
+        copy.wcs.cname = cname_uuid
+
+        # Subset the WCS
+        copy.wcs = copy.wcs.sub(axes)
         copy.naxis = copy.wcs.naxis
+
+        # Construct a list of dimensions from the original WCS in the order
+        # in which they appear in the final WCS.
+        keep = [cname_uuid.index(cname) if cname in cname_uuid else None for cname in copy.wcs.cname]
+
+        # Restore the original CNAMEs
+        copy.wcs.cname = ['' if i is None else self.wcs.cname[i] for i in keep]
+
+        # Subset pixel_shape and pixel_bounds
+        if self.pixel_shape:
+            copy.pixel_shape = tuple([None if i is None else self.pixel_shape[i] for i in keep])
+        if self.pixel_bounds:
+            copy.pixel_bounds = [None if i is None else self.pixel_bounds[i] for i in keep]
+
         return copy
+
     if _wcs is not None:
         sub.__doc__ = _wcs.Wcsprm.sub.__doc__
 
@@ -654,6 +702,9 @@ reduce these to 2 dimensions using the naxis kwarg.
             fixes = self.wcs.fix(translate_units, naxis)
             for key, val in fixes.items():
                 if val != "No change":
+                    if (key == 'datfix' and '1858-11-17' in val and
+                            not np.count_nonzero(self.wcs.mjdref)):
+                        continue
                     warnings.warn(
                         ("'{0}' made the change '{1}'.").
                         format(key, val),
@@ -1137,12 +1188,17 @@ reduce these to 2 dimensions using the naxis kwarg.
             if a is None:
                 return
             size = a.shape[0]
-            keywords[f'{name}_ORDER'] = size - 1
+            trdir = 'sky to detector' if name[-1] == 'P' else 'detector to sky'
+            comment = ('SIP polynomial order, axis {:d}, {:s}'
+                       .format(ord(name[0]) - ord('A'), trdir))
+            keywords[f'{name}_ORDER'] = size - 1, comment
+
+            comment = 'SIP distortion coefficient'
             for i in range(size):
                 for j in range(size - i):
                     if a[i, j] != 0.0:
                         keywords[
-                            f'{name}_{i:d}_{j:d}'] = a[i, j]
+                            f'{name}_{i:d}_{j:d}'] = a[i, j], comment
 
         write_array('A', self.sip.a)
         write_array('B', self.sip.b)
@@ -2674,26 +2730,6 @@ reduce these to 2 dimensions using the naxis kwarg.
                 ftpr.tofile(f, sep=',')
                 f.write(f') # color={color}, width={width:d} \n')
 
-    @property
-    def _naxis1(self):
-        warnings.warn(NAXIS_DEPRECATE_MESSAGE, AstropyDeprecationWarning)
-        return self._naxis[0]
-
-    @_naxis1.setter
-    def _naxis1(self, value):
-        warnings.warn(NAXIS_DEPRECATE_MESSAGE, AstropyDeprecationWarning)
-        self._naxis[0] = value
-
-    @property
-    def _naxis2(self):
-        warnings.warn(NAXIS_DEPRECATE_MESSAGE, AstropyDeprecationWarning)
-        return self._naxis[1]
-
-    @_naxis2.setter
-    def _naxis2(self, value):
-        warnings.warn(NAXIS_DEPRECATE_MESSAGE, AstropyDeprecationWarning)
-        self._naxis[1] = value
-
     def _get_naxis(self, header=None):
         _naxis = []
         if (header is not None and
@@ -3057,6 +3093,24 @@ reduce these to 2 dimensions using the naxis kwarg.
             return False
 
     @property
+    def spectral(self):
+        """
+        A copy of the current WCS with only the spectral axes included
+        """
+        return self.sub([WCSSUB_SPECTRAL])
+
+    @property
+    def is_spectral(self):
+        return self.has_spectral and self.naxis == 1
+
+    @property
+    def has_spectral(self):
+        try:
+            return self.wcs.spec >= 0
+        except InconsistentAxisTypesError:
+            return False
+
+    @property
     def has_distortion(self):
         """
         Returns `True` if any distortion terms are present.
@@ -3074,7 +3128,9 @@ reduce these to 2 dimensions using the naxis kwarg.
         except InconsistentAxisTypesError:
             try:
                 # for non-celestial axes, get_cdelt doesn't work
-                cdelt = np.dot(self.wcs.cd, np.diag(self.wcs.cdelt))
+                with warnings.catch_warnings():
+                    warnings.filterwarnings('ignore', 'cdelt will be ignored since cd is present', RuntimeWarning)
+                    cdelt = np.dot(self.wcs.cd, np.diag(self.wcs.cdelt))
             except AttributeError:
                 cdelt = np.diag(self.wcs.cdelt)
 

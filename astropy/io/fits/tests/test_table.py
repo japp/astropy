@@ -18,7 +18,6 @@ except ImportError:
 
 from astropy.io import fits
 from astropy.tests.helper import catch_warnings, ignore_warnings
-from astropy.utils.compat import NUMPY_LT_1_14_1, NUMPY_LT_1_14_2
 from astropy.utils.exceptions import AstropyDeprecationWarning
 
 from astropy.io.fits.column import Delayed, NUMPY2FITS
@@ -77,7 +76,7 @@ def comparerecords(a, b):
         if fieldb.dtype.char == 'S':
             fieldb = decode_ascii(fieldb)
         if (not isinstance(fielda, type(fieldb)) and not
-            isinstance(fieldb, type(fielda))):
+                isinstance(fieldb, type(fielda))):
             print("type(fielda): ", type(fielda), " fielda: ", fielda)
             print("type(fieldb): ", type(fieldb), " fieldb: ", fieldb)
             print(f'field {i} type differs')
@@ -194,7 +193,7 @@ class TestTableFunctions(FitsTestCase):
 
         # An alternative way to create a column-definitions object is from an
         # existing table.
-        xx = fits.ColDefs(tt[1])
+        _ = fits.ColDefs(tt[1])
 
         # now we write out the newly created table HDU to a FITS file:
         fout = fits.HDUList(fits.PrimaryHDU())
@@ -845,8 +844,6 @@ class TestTableFunctions(FitsTestCase):
             assert header['TNULL2'] == 'b'
             assert header['TNULL3'] == 2.3
 
-    @pytest.mark.xfail(not NUMPY_LT_1_14_1 and NUMPY_LT_1_14_2,
-        reason="See https://github.com/astropy/astropy/issues/7214")
     def test_mask_array(self):
         t = fits.open(self.data('table.fits'))
         tbdata = t[1].data
@@ -857,7 +854,6 @@ class TestTableFunctions(FitsTestCase):
 
         hdul = fits.open(self.temp('newtable.fits'))
 
-        # numpy >= 1.12 changes how structured arrays are printed, so we
         # match to a regex rather than a specific string.
         expect = r"\[\('NGC1002',\s+12.3[0-9]*\) \(\'NGC1003\',\s+15.[0-9]+\)\]"
         assert re.match(expect, str(hdu.data))
@@ -1588,12 +1584,32 @@ class TestTableFunctions(FitsTestCase):
                 np.array([False, True], dtype=bool)).all()
 
     def test_fits_rec_column_access(self):
-        t = fits.open(self.data('table.fits'))
-        tbdata = t[1].data
+        tbdata = fits.getdata(self.data('table.fits'))
         assert (tbdata.V_mag == tbdata.field('V_mag')).all()
         assert (tbdata.V_mag == tbdata['V_mag']).all()
 
-        t.close()
+        # Table with scaling (c3) and tnull (c1)
+        tbdata = fits.getdata(self.data('tb.fits'))
+        for col in ('c1', 'c2', 'c3', 'c4'):
+            data = getattr(tbdata, col)
+            assert (data == tbdata.field(col)).all()
+            assert (data == tbdata[col]).all()
+
+        # ascii table
+        tbdata = fits.getdata(self.data('ascii.fits'))
+        for col in ('a', 'b'):
+            data = getattr(tbdata, col)
+            assert (data == tbdata.field(col)).all()
+            assert (data == tbdata[col]).all()
+
+        # with VLA column
+        col1 = fits.Column(name='x', format='PI()',
+                           array=np.array([[45, 56], [11, 12, 13]],
+                                          dtype=np.object_))
+        hdu = fits.BinTableHDU.from_columns([col1])
+        assert type(hdu.data['x']) == type(hdu.data.x)  # noqa
+        assert (hdu.data['x'][0] == hdu.data.x[0]).all()
+        assert (hdu.data['x'][1] == hdu.data.x[1]).all()
 
     def test_table_with_zero_width_column(self):
         hdul = fits.open(self.data('zerowidth.fits'))
@@ -1652,10 +1668,10 @@ class TestTableFunctions(FitsTestCase):
         acol = fits.Column(name='MEMNAME', format='A10',
                            array=chararray.array(a))
         ahdu = fits.BinTableHDU.from_columns([acol])
-        assert ahdu.data.tostring().decode('raw-unicode-escape') == s
+        assert ahdu.data.tobytes().decode('raw-unicode-escape') == s
         ahdu.writeto(self.temp('newtable.fits'))
         with fits.open(self.temp('newtable.fits')) as hdul:
-            assert hdul[1].data.tostring().decode('raw-unicode-escape') == s
+            assert hdul[1].data.tobytes().decode('raw-unicode-escape') == s
             assert (hdul[1].data['MEMNAME'] == a).all()
         del hdul
 
@@ -1664,7 +1680,7 @@ class TestTableFunctions(FitsTestCase):
             ahdu.writeto(self.temp('newtable.fits'), overwrite=True)
 
         with fits.open(self.temp('newtable.fits')) as hdul:
-            assert (hdul[1].data.tostring().decode('raw-unicode-escape') ==
+            assert (hdul[1].data.tobytes().decode('raw-unicode-escape') ==
                     s.replace('\x00', ' '))
             assert (hdul[1].data['MEMNAME'] == a).all()
             ahdu = fits.BinTableHDU.from_columns(hdul[1].data.copy())
@@ -1674,7 +1690,7 @@ class TestTableFunctions(FitsTestCase):
         # revert to zeroes
         ahdu.writeto(self.temp('newtable.fits'), overwrite=True)
         with fits.open(self.temp('newtable.fits')) as hdul:
-            assert hdul[1].data.tostring().decode('raw-unicode-escape') == s
+            assert hdul[1].data.tobytes().decode('raw-unicode-escape') == s
             assert (hdul[1].data['MEMNAME'] == a).all()
 
     def test_multi_dimensional_columns(self):
@@ -2914,7 +2930,7 @@ class TestColumnFunctions(FitsTestCase):
 
             # Check how the raw data looks
             raw = np.rec.recarray.field(hdul[1].data, 'TEST')
-            assert raw.tostring() == b'   1.   2.   3.'
+            assert raw.tobytes() == b'   1.   2.   3.'
 
     def test_column_array_type_mismatch(self):
         """Regression test for https://aeon.stsci.edu/ssb/trac/pyfits/ticket/218"""
@@ -3080,15 +3096,16 @@ class TestColumnFunctions(FitsTestCase):
         """
 
         with pytest.raises(AssertionError) as err:
-            c = fits.Column(1, format='I', array=[1, 2, 3, 4, 5])
+            _ = fits.Column(1, format='I', array=[1, 2, 3, 4, 5])
         assert 'Column name must be a string able to fit' in str(err.value)
 
         with pytest.raises(VerifyError) as err:
-            c = fits.Column('col', format='I', null='Nan', disp=1, coord_type=1,
-                            coord_unit=2, coord_ref_point='1', coord_ref_value='1',
-                            coord_inc='1', time_ref_pos=1)
-        err_msgs = ['keyword arguments to Column were invalid', 'TNULL', 'TDISP',
-                    'TCTYP', 'TCUNI', 'TCRPX', 'TCRVL', 'TCDLT', 'TRPOS']
+            _ = fits.Column('col', format=0, null='Nan', disp=1, coord_type=1,
+                            coord_unit=2, coord_inc='1', time_ref_pos=1,
+                            coord_ref_point='1', coord_ref_value='1')
+        err_msgs = ['keyword arguments to Column were invalid',
+                    'TFORM', 'TNULL', 'TDISP', 'TCTYP', 'TCUNI', 'TCRPX',
+                    'TCRVL', 'TCDLT', 'TRPOS']
         for msg in err_msgs:
             assert msg in str(err.value)
 
@@ -3103,16 +3120,34 @@ class TestColumnFunctions(FitsTestCase):
         """
 
         with pytest.raises(VerifyError) as err:
-            c = fits.Column('a', format='B', start='a', array=[1, 2, 3])
+            _ = fits.Column('a', format='B', start='a', array=[1, 2, 3])
         assert "start option (TBCOLn) is not allowed for binary table columns" in str(err.value)
 
         with pytest.raises(VerifyError) as err:
-            c = fits.Column('a', format='I', start='a', array=[1, 2, 3])
+            _ = fits.Column('a', format='I', start='a', array=[1, 2, 3])
         assert "start option (TBCOLn) must be a positive integer (got 'a')." in str(err.value)
 
         with pytest.raises(VerifyError) as err:
-            c = fits.Column('a', format='I', start='-56', array=[1, 2, 3])
+            _ = fits.Column('a', format='I', start='-56', array=[1, 2, 3])
         assert "start option (TBCOLn) must be a positive integer (got -56)." in str(err.value)
+
+    @pytest.mark.parametrize('keys',
+                             [{'TFORM': 'Z', 'TDISP': 'E'},
+                              {'TFORM': '2', 'TDISP': '2E'},
+                              {'TFORM': 3, 'TDISP': 6.3},
+                              {'TFORM': float, 'TDISP': np.float64},
+                              {'TFORM': '', 'TDISP': 'E.5'}])
+    def test_column_verify_formats(self, keys):
+        """
+        Additional tests for verification of 'TFORM' and 'TDISP' keyword
+        arguments used to initialize a Column.
+        """
+        with pytest.raises(VerifyError) as err:
+            _ = fits.Column('col', format=keys['TFORM'], disp=keys['TDISP'])
+
+        for key in keys.keys():
+            assert key in str(err.value)
+            assert str(keys[key]) in str(err.value)
 
 
 def test_regression_5383():
@@ -3309,3 +3344,15 @@ def test_a3dtable(tmpdir):
             'Converted the XTENSION keyword to BINTABLE.')
 
         assert hdul[1].header['XTENSION'] == 'BINTABLE'
+
+
+def test_invalid_file(tmp_path):
+    hdu = fits.BinTableHDU()
+    # little trick to write an invalid card ...
+    hdu.header['FOO'] = None
+    hdu.header.cards['FOO']._value = np.nan
+
+    testfile = tmp_path / 'test.fits'
+    hdu.writeto(testfile, output_verify='ignore')
+    with fits.open(testfile) as hdul:
+        assert hdul[1].data is not None

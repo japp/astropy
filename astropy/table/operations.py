@@ -5,7 +5,7 @@ High-level table operations:
 - setdiff()
 - hstack()
 - vstack()
-- cstack()
+- dstack()
 """
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
@@ -20,11 +20,15 @@ import numpy as np
 from astropy.utils import metadata
 from .table import Table, QTable, Row, Column, MaskedColumn
 from astropy.units import Quantity
+from astropy.utils.compat import NUMPY_LT_1_17
 
 from . import _np_utils
 from .np_utils import fix_column_name, TableMergeError
 
-__all__ = ['join', 'setdiff', 'hstack', 'vstack', 'unique']
+__all__ = ['join', 'setdiff', 'hstack', 'vstack', 'unique',
+           'join_skycoord', 'join_distance']
+
+__doctest_requires__ = {'join_skycoord': ['scipy'], 'join_distance': ['scipy']}
 
 
 def _merge_table_meta(out, tables, metadata_conflicts='warn'):
@@ -72,23 +76,270 @@ def _get_out_class(objs):
     From a list of input objects ``objs`` get merged output object class.
 
     This is just taken as the deepest subclass. This doesn't handle complicated
-    inheritance schemes.
+    inheritance schemes, but as a special case, classes which share ``info``
+    are taken to be compatible.
     """
     out_class = objs[0].__class__
     for obj in objs[1:]:
         if issubclass(obj.__class__, out_class):
             out_class = obj.__class__
 
-    if any(not issubclass(out_class, obj.__class__) for obj in objs):
+    if any(not (issubclass(out_class, obj.__class__)
+                or out_class.info is obj.__class__.info) for obj in objs):
         raise ValueError('unmergeable object classes {}'
                          .format([obj.__class__.__name__ for obj in objs]))
 
     return out_class
 
 
+def join_skycoord(distance, distance_func='search_around_sky'):
+    """Helper function to join on SkyCoord columns using distance matching.
+
+    This function is intended for use in ``table.join()`` to allow performing a
+    table join where the key columns are both ``SkyCoord`` objects, matched by
+    computing the distance between points and accepting values below
+    ``distance``.
+
+    The distance cross-matching is done using either
+    `~astropy.coordinates.search_around_sky` or
+    `~astropy.coordinates.search_around_3d`, depending on the value of
+    ``distance_func``.  The default is ``'search_around_sky'``.
+
+    One can also provide a function object for ``distance_func``, in which case
+    it must be a function that follows the same input and output API as
+    `~astropy.coordinates.search_around_sky`. In this case the function will
+    be called with ``(skycoord1, skycoord2, distance)`` as arguments.
+
+    Parameters
+    ----------
+    distance : Quantity (angle or length)
+        Maximum distance between points to be considered a join match
+    distance_func : str or function
+        Specifies the function for performing the cross-match based on
+        ``distance``. If supplied as a string this specifies the name of a
+        function in `astropy.coordinates`. If supplied as a function then that
+        function is called directly.
+
+    Returns
+    -------
+    join_func : function
+        Function that accepts two ``SkyCoord`` columns (col1, col2) and returns
+        the tuple (ids1, ids2) of pair-matched unique identifiers.
+
+    Examples
+    --------
+    This example shows an inner join of two ``SkyCoord`` columns, taking any
+    sources within 0.2 deg to be a match.  Note the new ``sc_id`` column which
+    is added and provides a unique source identifier for the matches.
+
+      >>> from astropy.coordinates import SkyCoord
+      >>> import astropy.units as u
+      >>> from astropy.table import Table, join_skycoord
+      >>> from astropy import table
+
+      >>> sc1 = SkyCoord([0, 1, 1.1, 2], [0, 0, 0, 0], unit='deg')
+      >>> sc2 = SkyCoord([0.5, 1.05, 2.1], [0, 0, 0], unit='deg')
+
+      >>> join_func = join_skycoord(0.2 * u.deg)
+      >>> join_func(sc1, sc2)  # Associate each coordinate with unique source ID
+      (array([3, 1, 1, 2]), array([4, 1, 2]))
+
+      >>> t1 = Table([sc1], names=['sc'])
+      >>> t2 = Table([sc2], names=['sc'])
+      >>> t12 = table.join(t1, t2, join_funcs={'sc': join_skycoord(0.2 * u.deg)})
+      >>> print(t12)  # Note new `sc_id` column with the IDs from join_func()
+      sc_id   sc_1    sc_2
+            deg,deg deg,deg
+      ----- ------- --------
+          1 1.0,0.0 1.05,0.0
+          1 1.1,0.0 1.05,0.0
+          2 2.0,0.0  2.1,0.0
+
+    """
+    if isinstance(distance_func, str):
+        import astropy.coordinates as coords
+        try:
+            distance_func = getattr(coords, distance_func)
+        except AttributeError:
+            raise ValueError('distance_func must be a function in astropy.coordinates')
+    else:
+        from inspect import isfunction
+        if not isfunction(distance_func):
+            raise ValueError('distance_func must be a str or function')
+
+    def join_func(sc1, sc2):
+
+        # Call the appropriate SkyCoord method to find pairs within distance
+        idxs1, idxs2, d2d, d3d = distance_func(sc1, sc2, distance)
+
+        # Now convert that into unique identifiers for each near-pair. This is
+        # taken to be transitive, so that if points 1 and 2 are "near" and points
+        # 1 and 3 are "near", then 1, 2, and 3 are all given the same identifier.
+        # This identifier will then be used in the table join matching.
+
+        # Identifiers for each column, initialized to all zero.
+        ids1 = np.zeros(len(sc1), dtype=int)
+        ids2 = np.zeros(len(sc2), dtype=int)
+
+        # Start the identifier count at 1
+        id_ = 1
+        for idx1, idx2 in zip(idxs1, idxs2):
+            # If this col1 point is previously identified then set corresponding
+            # col2 point to same identifier.  Likewise for col2 and col1.
+            if ids1[idx1] > 0:
+                ids2[idx2] = ids1[idx1]
+            elif ids2[idx2] > 0:
+                ids1[idx1] = ids2[idx2]
+            else:
+                # Not yet seen so set identifer for col1 and col2
+                ids1[idx1] = id_
+                ids2[idx2] = id_
+                id_ += 1
+
+        # Fill in unique identifiers for points with no near neighbor
+        for ids in (ids1, ids2):
+            for idx in np.flatnonzero(ids == 0):
+                ids[idx] = id_
+                id_ += 1
+
+        # End of enclosure join_func()
+        return ids1, ids2
+
+    return join_func
+
+
+def join_distance(distance, kdtree_args=None, query_args=None):
+    """Helper function to join table columns using distance matching.
+
+    This function is intended for use in ``table.join()`` to allow performing
+    a table join where the key columns are matched by computing the distance
+    between points and accepting values below ``distance``. This numerical
+    "fuzzy" match can apply to 1-D or 2-D columns, where in the latter case
+    the distance is a vector distance.
+
+    The distance cross-matching is done using `scipy.spatial.cKDTree`. If
+    necessary you can tweak the default behavior by providing ``dict`` values
+    for the ``kdtree_args`` or ``query_args``.
+
+    Parameters
+    ----------
+    distance : float, Quantity
+        Maximum distance between points to be considered a join match
+    kdtree_args : dict, None
+        Optional extra args for `~scipy.spatial.cKDTree`
+    query_args : dict, None
+        Optional extra args for `~scipy.spatial.cKDTree.query_ball_tree`
+
+    Returns
+    -------
+    join_func : function
+        Function that accepts (skycoord1, skycoord2) and returns the tuple
+        (ids1, ids2) of pair-matched unique identifiers.
+
+    Examples
+    --------
+
+      >>> from astropy.table import Table, join_distance
+      >>> from astropy import table
+
+      >>> c1 = [0, 1, 1.1, 2]
+      >>> c2 = [0.5, 1.05, 2.1]
+
+      >>> t1 = Table([c1], names=['col'])
+      >>> t2 = Table([c2], names=['col'])
+      >>> t12 = table.join(t1, t2, join_type='outer', join_funcs={'col': join_distance(0.2)})
+      >>> print(t12)
+      col_id col_1 col_2
+      ------ ----- -----
+           1   1.0  1.05
+           1   1.1  1.05
+           2   2.0   2.1
+           3   0.0    --
+           4    --   0.5
+
+    """
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError as exc:
+        raise ImportError('scipy is required to use join_distance()') from exc
+
+    if kdtree_args is None:
+        kdtree_args = {}
+    if query_args is None:
+        query_args = {}
+
+    def join_func(col1, col2):
+        if col1.ndim > 2 or col2.ndim > 2:
+            raise ValueError('columns for isclose_join must be 1- or 2-dimensional')
+
+        if isinstance(distance, Quantity):
+            # Convert to np.array with common unit
+            col1 = col1.to_value(distance.unit)
+            col2 = col2.to_value(distance.unit)
+            dist = distance.value
+        else:
+            # Convert to np.array to allow later in-place shape changing
+            col1 = np.asarray(col1)
+            col2 = np.asarray(col2)
+            dist = distance
+
+        # Ensure columns are pure np.array and are 2-D for use with KDTree
+        if col1.ndim == 1:
+            col1.shape = col1.shape + (1,)
+        if col2.ndim == 1:
+            col2.shape = col2.shape + (1,)
+
+        # Cross-match col1 and col2 within dist using KDTree
+        kd1 = cKDTree(col1, **kdtree_args)
+        kd2 = cKDTree(col2, **kdtree_args)
+        nears = kd1.query_ball_tree(kd2, r=dist, **query_args)
+
+        # Output of above is nears which is a list of lists, where the outer
+        # list corresponds to each item in col1, and where the inner lists are
+        # indexes into col2 of elements within the distance tolerance.  This
+        # identifies col1 / col2 near pairs.
+
+        # Now convert that into unique identifiers for each near-pair. This is
+        # taken to be transitive, so that if points 1 and 2 are "near" and points
+        # 1 and 3 are "near", then 1, 2, and 3 are all given the same identifier.
+        # This identifier will then be used in the table join matching.
+
+        # Identifiers for each column, initialized to all zero.
+        ids1 = np.zeros(len(col1), dtype=int)
+        ids2 = np.zeros(len(col2), dtype=int)
+
+        # Start the identifier count at 1
+        id_ = 1
+        for idx1, idxs2 in enumerate(nears):
+            for idx2 in idxs2:
+                # If this col1 point is previously identified then set corresponding
+                # col2 point to same identifier.  Likewise for col2 and col1.
+                if ids1[idx1] > 0:
+                    ids2[idx2] = ids1[idx1]
+                elif ids2[idx2] > 0:
+                    ids1[idx1] = ids2[idx2]
+                else:
+                    # Not yet seen so set identifer for col1 and col2
+                    ids1[idx1] = id_
+                    ids2[idx2] = id_
+                    id_ += 1
+
+        # Fill in unique identifiers for points with no near neighbor
+        for ids in (ids1, ids2):
+            for idx in np.flatnonzero(ids == 0):
+                ids[idx] = id_
+                id_ += 1
+
+        # End of enclosure join_func()
+        return ids1, ids2
+
+    return join_func
+
+
 def join(left, right, keys=None, join_type='inner',
          uniq_col_name='{col_name}_{table_name}',
-         table_names=['1', '2'], metadata_conflicts='warn'):
+         table_names=['1', '2'], metadata_conflicts='warn',
+         join_funcs=None):
     """
     Perform a join of the left table with the right table on specified keys.
 
@@ -102,7 +353,7 @@ def join(left, right, keys=None, join_type='inner',
         Name(s) of column(s) used to match rows of left and right tables.
         Default is to use all columns which are common to both tables.
     join_type : str
-        Join type ('inner' | 'outer' | 'left' | 'right'), default is 'inner'
+        Join type ('inner' | 'outer' | 'left' | 'right' | 'cartesian'), default is 'inner'
     uniq_col_name : str or None
         String generate a unique output column name in case of a conflict.
         The default is '{col_name}_{table_name}'.
@@ -114,6 +365,9 @@ def join(left, right, keys=None, join_type='inner',
             * ``'silent'``: silently pick the last conflicting meta-data value
             * ``'warn'``: pick the last conflicting meta-data value, but emit a warning (default)
             * ``'error'``: raise an exception.
+    join_funcs : dict, None
+        Dict of functions to use for matching the corresponding key column(s).
+        See `~astropy.table.join_skycoord` for an example and details.
 
     Returns
     -------
@@ -129,7 +383,8 @@ def join(left, right, keys=None, join_type='inner',
 
     col_name_map = OrderedDict()
     out = _join(left, right, keys, join_type,
-                uniq_col_name, table_names, col_name_map, metadata_conflicts)
+                uniq_col_name, table_names, col_name_map, metadata_conflicts,
+                join_funcs)
 
     # Merge the column and table meta data. Table subclasses might override
     # these methods for custom merge behavior.
@@ -194,8 +449,8 @@ def setdiff(table1, table2, keys=None):
     if keys is None:
         keys = table1.colnames
 
-    #Check that all keys are in table1 and table2
-    for tbl, tbl_str in ((table1,'table1'), (table2,'table2')):
+    # Check that all keys are in table1 and table2
+    for tbl, tbl_str in ((table1, 'table1'), (table2, 'table2')):
         diff_keys = np.setdiff1d(keys, tbl.colnames)
         if len(diff_keys) != 0:
             raise ValueError("The {} columns are missing from {}, cannot take "
@@ -232,7 +487,7 @@ def setdiff(table1, table2, keys=None):
     return t12_diff
 
 
-def cstack(tables, join_type='outer', metadata_conflicts='warn'):
+def dstack(tables, join_type='outer', metadata_conflicts='warn'):
     """
     Stack columns within tables depth-wise
 
@@ -278,7 +533,7 @@ def cstack(tables, join_type='outer', metadata_conflicts='warn'):
       --- ---
         5   7
         6   8
-      >>> print(cstack([t1, t2]))
+      >>> print(dstack([t1, t2]))
       a [2]  b [2]
       ------ ------
       1 .. 5 3 .. 7
@@ -290,7 +545,7 @@ def cstack(tables, join_type='outer', metadata_conflicts='warn'):
 
     n_rows = set(len(table) for table in tables)
     if len(n_rows) != 1:
-        raise ValueError('Table lengths must all match for cstack')
+        raise ValueError('Table lengths must all match for dstack')
     n_row = n_rows.pop()
 
     out = vstack(tables, join_type, metadata_conflicts)
@@ -303,7 +558,11 @@ def cstack(tables, join_type='outer', metadata_conflicts='warn'):
         # are just carried along.
         # [x x x y y y] => [[x x x],
         #                   [y y y]]
-        col.shape = (len(tables), n_row) + col.shape[1:]
+        new_shape = (len(tables), n_row) + col.shape[1:]
+        try:
+            col.shape = (len(tables), n_row) + col.shape[1:]
+        except AttributeError:
+            col = col.reshape(new_shape)
 
         # Transpose the table and row axes to get to
         # [[x, y],
@@ -474,7 +733,7 @@ def unique(input_table, keys=None, silent=False, keep='first'):
         removed, leaving only rows that are already unique in
         the input.
         Default is 'first'.
-    silent : boolean
+    silent : bool
         If `True`, masked value column(s) are silently removed from
         ``keys``. If `False`, an exception is raised when ``keys``
         contains masked value column(s).
@@ -561,7 +820,6 @@ def unique(input_table, keys=None, silent=False, keep='first'):
             raise ValueError("duplicate key names")
 
     # Check for columns with masked values
-    nkeys = 0
     for key in keys[:]:
         col = input_table[key]
         if hasattr(col, 'mask') and np.any(col.mask):
@@ -697,10 +955,91 @@ def common_dtype(cols):
         raise tme
 
 
+def _get_join_sort_idxs(keys, left, right):
+    # Go through each of the key columns in order and make columns for
+    # a new structured array that represents the lexical ordering of those
+    # key columns. This structured array is then argsort'ed. The trick here
+    # is that some columns (e.g. Time) may need to be expanded into multiple
+    # columns for ordering here.
+
+    ii = 0  # Index for uniquely naming the sort columns
+    sort_keys_dtypes = []  # sortable_table dtypes as list of (name, dtype_str, shape) tuples
+    sort_keys = []  # sortable_table (structured ndarray) column names
+    sort_left = {}  # sortable ndarrays from left table
+    sort_right = {}  # sortable ndarray from right table
+
+    for key in keys:
+        # get_sortable_arrays() returns a list of ndarrays that can be lexically
+        # sorted to represent the order of the column. In most cases this is just
+        # a single element of the column itself.
+        left_sort_cols = left[key].info.get_sortable_arrays()
+        right_sort_cols = right[key].info.get_sortable_arrays()
+
+        if len(left_sort_cols) != len(right_sort_cols):
+            # Should never happen because cols are screened beforehand for compatibility
+            raise RuntimeError('mismatch in sort cols lengths')
+
+        for left_sort_col, right_sort_col in zip(left_sort_cols, right_sort_cols):
+            # Check for consistency of shapes. Mismatch should never happen.
+            shape = left_sort_col.shape[1:]
+            if shape != right_sort_col.shape[1:]:
+                raise RuntimeError('mismatch in shape of left vs. right sort array')
+
+            if shape != ():
+                raise ValueError(f'sort key column {key!r} must be 1-d')
+
+            sort_key = str(ii)
+            sort_keys.append(sort_key)
+            sort_left[sort_key] = left_sort_col
+            sort_right[sort_key] = right_sort_col
+
+            # Build up dtypes for the structured array that gets sorted.
+            dtype_str = common_dtype([left_sort_col, right_sort_col])
+            sort_keys_dtypes.append((sort_key, dtype_str))
+            ii += 1
+
+    # Make the empty sortable table and fill it
+    len_left = len(left)
+    sortable_table = np.empty(len_left + len(right), dtype=sort_keys_dtypes)
+    for key in sort_keys:
+        sortable_table[key][:len_left] = sort_left[key]
+        sortable_table[key][len_left:] = sort_right[key]
+
+    # Finally do the (lexical) argsort and make a new sorted version
+    idx_sort = sortable_table.argsort(order=sort_keys)
+    sorted_table = sortable_table[idx_sort]
+
+    # Get indexes of unique elements (i.e. the group boundaries)
+    diffs = np.concatenate(([True], sorted_table[1:] != sorted_table[:-1], [True]))
+    idxs = np.flatnonzero(diffs)
+
+    return idxs, idx_sort
+
+
+def _apply_join_funcs(left, right, keys, join_funcs):
+    """Apply join_funcs
+    """
+    # Make light copies of left and right, then add new index columns.
+    left = left.copy(copy_data=False)
+    right = right.copy(copy_data=False)
+    for key, join_func in join_funcs.items():
+        ids1, ids2 = join_func(left[key], right[key])
+        for ii in itertools.count(1):
+            id_key = key + '_' * ii + 'id'
+            if id_key not in left.columns and id_key not in right.columns:
+                break
+        keys = tuple(id_key if orig_key == key else orig_key for orig_key in keys)
+        left.add_column(ids1, index=0, name=id_key)  # [id_key] = ids1
+        right.add_column(ids2, index=0, name=id_key)  # [id_key] = ids2
+
+    return left, right, keys
+
+
 def _join(left, right, keys=None, join_type='inner',
-         uniq_col_name='{col_name}_{table_name}',
-         table_names=['1', '2'],
-         col_name_map=None, metadata_conflicts='warn'):
+          uniq_col_name='{col_name}_{table_name}',
+          table_names=['1', '2'],
+          col_name_map=None, metadata_conflicts='warn',
+          join_funcs=None):
     """
     Perform a join of the left and right Tables on specified keys.
 
@@ -714,7 +1053,7 @@ def _join(left, right, keys=None, join_type='inner',
         Name(s) of column(s) used to match rows of left and right tables.
         Default is to use all columns which are common to both tables.
     join_type : str
-        Join type ('inner' | 'outer' | 'left' | 'right'), default is 'inner'
+        Join type ('inner' | 'outer' | 'left' | 'right' | 'cartesian'), default is 'inner'
     uniq_col_name : str or None
         String generate a unique output column name in case of a conflict.
         The default is '{col_name}_{table_name}'.
@@ -724,19 +1063,48 @@ def _join(left, right, keys=None, join_type='inner',
     col_name_map : empty dict or None
         If passed as a dict then it will be updated in-place with the
         mapping of output to input column names.
+    metadata_conflicts : str
+        How to proceed with metadata conflicts. This should be one of:
+            * ``'silent'``: silently pick the last conflicting meta-data value
+            * ``'warn'``: pick the last conflicting meta-data value, but emit a warning (default)
+            * ``'error'``: raise an exception.
+    join_funcs : dict, None
+        Dict of functions to use for matching the corresponding key column(s).
+        See `~astropy.table.join_skycoord` for an example and details.
 
     Returns
     -------
     joined_table : `~astropy.table.Table` object
         New table containing the result of the join operation.
     """
+    from astropy.time import Time
+
     # Store user-provided col_name_map until the end
     _col_name_map = col_name_map
 
-    if join_type not in ('inner', 'outer', 'left', 'right'):
+    # Special column name for cartesian join, should never collide with real column
+    cartesian_index_name = '__table_cartesian_join_temp_index__'
+
+    if join_type not in ('inner', 'outer', 'left', 'right', 'cartesian'):
         raise ValueError("The 'join_type' argument should be in 'inner', "
-                         "'outer', 'left' or 'right' (got '{}' instead)".
+                         "'outer', 'left', 'right', or 'cartesian' "
+                         "(got '{}' instead)".
                          format(join_type))
+
+    if join_type == 'cartesian':
+        if keys:
+            raise ValueError('cannot supply keys for a cartesian join')
+
+        if join_funcs:
+            raise ValueError('cannot supply join_funcs for a cartesian join')
+
+        # Make light copies of left and right, then add temporary index columns
+        # with all the same value so later an outer join turns into a cartesian join.
+        left = left.copy(copy_data=False)
+        right = right.copy(copy_data=False)
+        left[cartesian_index_name] = np.uint8(0)
+        right[cartesian_index_name] = np.uint8(0)
+        keys = (cartesian_index_name, )
 
     # If we have a single key, put it in a tuple
     if keys is None:
@@ -755,9 +1123,12 @@ def _join(left, right, keys=None, join_type='inner',
             if hasattr(arr[name], 'mask') and np.any(arr[name].mask):
                 raise TableMergeError('{} key column {!r} has missing values'
                                       .format(arr_label, name))
-            if not isinstance(arr[name], np.ndarray):
-                raise ValueError("non-ndarray column '{}' not allowed as a key column"
-                                 .format(name))
+
+    if join_funcs is not None:
+        if not all(key in keys for key in join_funcs):
+            raise ValueError(f'join_funcs keys {join_funcs.keys()} must be a '
+                             f'subset of join keys {keys}')
+        left, right, keys = _apply_join_funcs(left, right, keys, join_funcs)
 
     len_left, len_right = len(left), len(right)
 
@@ -768,29 +1139,23 @@ def _join(left, right, keys=None, join_type='inner',
     col_name_map = get_col_name_map([left, right], keys, uniq_col_name, table_names)
     out_descrs = get_descrs([left, right], col_name_map)
 
-    # Make an array with just the key columns.  This uses a temporary
-    # structured array for efficiency.
-    out_keys_dtype = [descr for descr in out_descrs if descr[0] in keys]
-    out_keys = np.empty(len_left + len_right, dtype=out_keys_dtype)
-    for key in keys:
-        out_keys[key][:len_left] = left[key]
-        out_keys[key][len_left:] = right[key]
-    idx_sort = out_keys.argsort(order=keys)
-    out_keys = out_keys[idx_sort]
-
-    # Get all keys
-    diffs = np.concatenate(([True], out_keys[1:] != out_keys[:-1], [True]))
-    idxs = np.flatnonzero(diffs)
+    try:
+        idxs, idx_sort = _get_join_sort_idxs(keys, left, right)
+    except NotImplementedError:
+        raise TypeError('one or more key columns are not sortable')
 
     # Main inner loop in Cython to compute the cartesian product
     # indices for the given join type
-    int_join_type = {'inner': 0, 'outer': 1, 'left': 2, 'right': 3}[join_type]
+    int_join_type = {'inner': 0, 'outer': 1, 'left': 2, 'right': 3,
+                     'cartesian': 1}[join_type]
     masked, n_out, left_out, left_mask, right_out, right_mask = \
         _np_utils.join_inner(idxs, idx_sort, len_left, int_join_type)
 
     out = _get_out_class([left, right])()
 
     for out_name, dtype, shape in out_descrs:
+        if out_name == cartesian_index_name:
+            continue
 
         left_name, right_name = col_name_map[out_name]
         if left_name and right_name:  # this is a key which comes from left and right
@@ -803,18 +1168,19 @@ def _join(left, right, keys=None, join_type='inner',
 
             out[out_name] = col_cls.info.new_like(cols, n_out, metadata_conflicts, out_name)
 
-            if issubclass(col_cls, Column):
+            if not NUMPY_LT_1_17 or issubclass(col_cls, (Column, Time)):
                 out[out_name][:] = np.where(right_mask,
                                             left[left_name].take(left_out),
                                             right[right_name].take(right_out))
             else:
                 # np.where does not work for mixin columns (e.g. Quantity) so
                 # use a slower workaround.
-                left_mask = ~right_mask
-                if np.any(left_mask):
-                    out[out_name][left_mask] = left[left_name].take(left_out)
+                non_right_mask = ~right_mask
                 if np.any(right_mask):
-                    out[out_name][right_mask] = right[right_name].take(right_out)
+                    out[out_name][:] = left[left_name].take(left_out)
+                if np.any(non_right_mask):
+                    out[out_name][non_right_mask] = right[right_name].take(right_out)[
+                        non_right_mask]
             continue
         elif left_name:  # out_name came from the left table
             name, array, array_out, array_mask = left_name, left, left_out, left_mask
@@ -968,7 +1334,7 @@ def _vstack(arrays, join_type='outer', col_name_map=None, metadata_conflicts='wa
 
 
 def _hstack(arrays, join_type='outer', uniq_col_name='{col_name}_{table_name}',
-           table_names=None, col_name_map=None):
+            table_names=None, col_name_map=None):
     """
     Stack tables horizontally (by columns)
 

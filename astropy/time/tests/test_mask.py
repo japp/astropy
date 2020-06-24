@@ -3,8 +3,6 @@
 import functools
 import numpy as np
 
-from astropy.io.fits.verify import VerifyWarning
-from astropy.utils.compat import NUMPY_LT_1_14
 from astropy.utils import iers
 from astropy.tests.helper import pytest
 from astropy.time import Time
@@ -75,15 +73,10 @@ def test_str():
     assert str(t) == "['2000:001:00:00:00.000' --]"
     assert repr(t) == "<Time object: scale='utc' format='yday' value=['2000:001:00:00:00.000' --]>"
 
-    if NUMPY_LT_1_14:
-        expected = ["masked_array(data = ['2000-01-01 00:00:00.000' --],",
-                    "             mask = [False  True],",
-                    "       fill_value = N/A)"]
-    else:
-        expected = ["masked_array(data=['2000-01-01 00:00:00.000', --],",
-                    '             mask=[False,  True],',
-                    "       fill_value='N/A',",
-                    "            dtype='<U23')"]
+    expected = ["masked_array(data=['2000-01-01 00:00:00.000', --],",
+                '             mask=[False,  True],',
+                "       fill_value='N/A',",
+                "            dtype='<U23')"]
 
     # Note that we need to take care to allow for big-endian platforms,
     # for which the dtype will be >U23 instead of <U23, which we do with
@@ -156,6 +149,15 @@ def test_masked_input():
     assert t2.masked is True
 
 
+def test_all_masked_input():
+    """Fix for #9612"""
+    # Test with jd=0 and jd=np.nan. Both triggered an exception prior to #9624
+    # due to astropy.utils.exceptions.ErfaError.
+    for val in (0, np.nan):
+        t = Time(np.ma.masked_array([val], mask=[True]), format='jd')
+        assert str(t.iso) == '[--]'
+
+
 def test_serialize_fits_masked(tmpdir):
     tm = Time([1, 2, 3], format='cxcsec')
     tm[1] = np.ma.masked
@@ -190,7 +192,9 @@ def test_serialize_hdf5_masked(tmpdir):
     assert np.all(t2['col0'].value == t['col0'].value)
 
 
+# Ignore warning in MIPS https://github.com/astropy/astropy/issues/9750
 @pytest.mark.skipif('not HAS_YAML')
+@pytest.mark.filterwarnings('ignore:invalid value encountered')
 def test_serialize_ecsv_masked(tmpdir):
     tm = Time([1, 2, 3], format='cxcsec')
     tm[1] = np.ma.masked

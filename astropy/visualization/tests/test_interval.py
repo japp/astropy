@@ -4,9 +4,11 @@ import pytest
 import numpy as np
 
 from astropy.utils import NumpyRNGContext
-
-from astropy.visualization.interval import (ManualInterval, MinMaxInterval, PercentileInterval,
-                        AsymmetricPercentileInterval, ZScaleInterval)
+from astropy.visualization.interval import (ManualInterval,
+                                            MinMaxInterval,
+                                            PercentileInterval,
+                                            AsymmetricPercentileInterval,
+                                            ZScaleInterval)
 
 
 class TestInterval:
@@ -104,6 +106,20 @@ def test_zscale():
     vmin, vmax = interval.get_limits(data)
     np.testing.assert_allclose(vmin, 0, atol=0.1)
     np.testing.assert_allclose(vmax, 99, atol=0.1)
+
+
+def test_zscale_npoints():
+    """
+    Regression test to ensure ZScaleInterval returns the minimum and
+    maximum of the data if the number of data points is less than
+    ``min_pixels``.
+    """
+
+    data = np.arange(4).reshape((2, 2))
+    interval = ZScaleInterval(min_npixels=5)
+    vmin, vmax = interval.get_limits(data)
+    assert vmin == 0
+    assert vmax == 3
 
 
 def test_integers():

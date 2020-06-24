@@ -30,6 +30,8 @@ defaults in the class definition, e.g.::
 
 Note that these are all optional.
 
+.. _models_input_units:
+
 ``input_units``
 ^^^^^^^^^^^^^^^
 
@@ -61,7 +63,7 @@ also be specified as an attribute rather than a property in simple cases::
 ``return_units``
 ^^^^^^^^^^^^^^^^
 
-Similarly to ``return_units``, this should be dictionary that maps the return
+Similarly to :ref:`models_input_units`, this should be dictionary that maps the return
 values of a model to units. If :meth:`~astropy.modeling.Model.evaluate` was called
 with quantities but returns unitless values, the units are added to the output.
 If the return values are quantities in different units, they are converted to
@@ -85,8 +87,8 @@ equivalencies, for example::
 
     input_units_equivalencies = {'nu': u.spectral()}
 
-``input_units_allow_dimensionless``
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+``_input_units_allow_dimensionless``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 If set to `True`, values that are plain scalars or Numpy arrays can be passed to
 evaluate even if ``input_units`` specifies that the input should have units. It
@@ -99,7 +101,7 @@ maps input names to a Boolean to enable passing dimensionless values to
 Fitting
 -------
 
-To allow models with parameters that have units to be fit to data with units,
+To allow models with parameters that have units to be fitted to data with units,
 you will need to add a method called ``_parameter_units_for_data_units`` to your
 model class. This should take two arguments ``input_units`` and
 ``output_units`` - ``input_units`` will be set to a dictionary with
@@ -113,8 +115,8 @@ from both the models and the data. The following example shows the
 implementation for the 1D Gaussian::
 
     def _parameter_units_for_data_units(self, inputs_unit, outputs_unit):
-        return OrderedDict([('mean', inputs_unit['x']),
-                            ('stddev', inputs_unit['x']),
-                            ('amplitude', outputs_unit['y'])])
+        return {'mean': inputs_unit['x'],
+                'stddev': inputs_unit['x'],
+                'amplitude': outputs_unit['y']}
 
 With this method in place, the model can then be fit to data that has units.

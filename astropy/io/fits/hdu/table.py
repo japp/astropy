@@ -566,7 +566,6 @@ class _TableBaseHDU(ExtensionHDU, _TableLikeHDU):
         # if data is touched, use data info.
         if self._data_loaded:
             if self.data is None:
-                shape, format = (), ''
                 nrows = 0
             else:
                 nrows = len(self.data)
@@ -576,7 +575,6 @@ class _TableBaseHDU(ExtensionHDU, _TableLikeHDU):
 
         # if data is not touched yet, use header info.
         else:
-            shape = ()
             nrows = self._header['NAXIS2']
             ncols = self._header['TFIELDS']
             format = ', '.join([self._header['TFORM' + str(j + 1)]
@@ -951,14 +949,12 @@ class BinTableHDU(_TableBaseHDU):
                     for row in field:
                         if len(row) > 0:
                             nbytes += row.nbytes
-                            if not fileobj.simulateonly:
-                                fileobj.writearray(row)
+                            fileobj.writearray(row)
             else:
                 heap_data = data._get_heap_data()
                 if len(heap_data) > 0:
                     nbytes += len(heap_data)
-                    if not fileobj.simulateonly:
-                        fileobj.writearray(heap_data)
+                    fileobj.writearray(heap_data)
 
             data._heapsize = nbytes - data._gap
             size += nbytes
@@ -1145,12 +1141,12 @@ class BinTableHDU(_TableBaseHDU):
             `None`, the header parameter definitions are taken from
             the current values in this objects header.
 
-        replace : bool
+        replace : bool, optional
             When `True`, indicates that the entire header should be
             replaced with the contents of the ASCII file instead of
             just updating the current header.
 
-        header : Header object
+        header : `~astropy.io.fits.Header`, optional
             When the cdfile and hfile are missing, use this Header object in
             the creation of the new table and HDU.  Otherwise this Header
             supersedes the keywords from hfile, which is only used to update

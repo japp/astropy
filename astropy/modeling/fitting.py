@@ -20,7 +20,7 @@ function.  `~astropy.modeling.fitting.LevMarLSQFitter` uses
 `~scipy.optimize.leastsq` which combines optimization and statistic in one
 implementation.
 """
-
+# pylint: disable=invalid-name
 
 import abc
 import inspect
@@ -31,11 +31,12 @@ from functools import reduce, wraps
 
 import numpy as np
 
-from .utils import poly_map_domain, _combine_equivalency_dict
 from astropy.units import Quantity
 from astropy.utils.exceptions import AstropyUserWarning
+from .utils import poly_map_domain, _combine_equivalency_dict
 from .optimizers import (SLSQP, Simplex)
 from .statistic import (leastsquare)
+from .optimizers import (DEFAULT_MAXITER, DEFAULT_EPS, DEFAULT_ACC)
 
 # Check pkg_resources exists
 try:
@@ -54,8 +55,6 @@ STATISTICS = [leastsquare]
 
 # Optimizers implemented in `astropy.modeling.optimizers.py
 OPTIMIZERS = [Simplex, SLSQP]
-
-from .optimizers import (DEFAULT_MAXITER, DEFAULT_EPS, DEFAULT_ACC)
 
 
 class ModelsError(Exception):
@@ -122,19 +121,29 @@ def fitter_unit_support(func):
 
                 if model.input_units is not None:
                     if isinstance(x, Quantity):
-                        x = x.to(model.input_units['x'], equivalencies=input_units_equivalencies['x'])
+                        x = x.to(model.input_units[model.inputs[0]],
+                                 equivalencies=input_units_equivalencies[model.inputs[0]])
                     if isinstance(y, Quantity) and z is not None:
-                        y = y.to(model.input_units['y'], equivalencies=input_units_equivalencies['y'])
+                        y = y.to(model.input_units[model.inputs[1]],
+                                 equivalencies=input_units_equivalencies[model.inputs[1]])
+
+                # Create a dictionary mapping the real model inputs and outputs
+                # names to the data. This remapping of names must be done here, after
+                # the the input data is converted to the correct units.
+                rename_data = {model.inputs[0]: x}
+                if z is not None:
+                    rename_data[model.outputs[0]] = z
+                    rename_data[model.inputs[1]] = y
+                else:
+                    rename_data[model.outputs[0]] = y
+                    rename_data['z'] = None
 
                 # We now strip away the units from the parameters, taking care to
                 # first convert any parameters to the units that correspond to the
                 # input units (to make sure that initial guesses on the parameters)
                 # are in the right unit system
-
-                model = model.without_units_for_data(x=x, y=y, z=z)
-
+                model = model.without_units_for_data(**rename_data)
                 # We strip away the units from the input itself
-
                 add_back_units = False
 
                 if isinstance(x, Quantity):
@@ -163,13 +172,13 @@ def fitter_unit_support(func):
 
                 # And finally we add back units to the parameters
                 if add_back_units:
-                    model_new = model_new.with_units_from_data(x=x, y=y, z=z)
-
+                    model_new = model_new.with_units_from_data(**rename_data)
                 return model_new
 
             else:
 
-                raise NotImplementedError("This model does not support being fit to data with units")
+                raise NotImplementedError("This model does not support being "
+                                          "fit to data with units.")
 
         else:
 
@@ -189,6 +198,8 @@ class Fitter(metaclass=_FitterMeta):
     statistic : callable
         Statistic function
     """
+
+    supported_constraints = []
 
     def __init__(self, optimizer, statistic):
         if optimizer is None:
@@ -320,9 +331,9 @@ class LinearLSQFitter(metaclass=_FitterMeta):
             model to fit to x, y, z
         x : array
             Input coordinates
-        y : array-like
+        y : array_like
             Input coordinates
-        z : array-like (optional)
+        z : array_like, optional
             Input coordinates.
             If the dependent (``y`` or ``z``) co-ordinate values are provided
             as a `numpy.ma.MaskedArray`, any masked points are ignored when
@@ -330,7 +341,7 @@ class LinearLSQFitter(metaclass=_FitterMeta):
             there are masked points (not just an empty mask), as the matrix
             equation has to be solved for each model separately when their
             co-ordinate grids differ.
-        weights : array (optional)
+        weights : array, optional
             Weights for fitting.
             For data with Gaussian uncertainties, the weights should be
             1/sigma.
@@ -413,7 +424,7 @@ class LinearLSQFitter(metaclass=_FitterMeta):
                 lhs = self._deriv_with_constraints(model_copy,
                                                    fitparam_indices, x=x, y=y)
                 fixderivs = self._deriv_with_constraints(model_copy,
-                                                    fixparam_indices, x=x, y=y)
+                                                         fixparam_indices, x=x, y=y)
             else:
                 lhs = model_copy.fit_deriv(x, y, *model_copy.parameters)
             sum_of_implicit_terms = model_copy.sum_of_implicit_terms(x, y)
@@ -568,9 +579,9 @@ class FittingWithOutlierRemoval:
         sets (unless overridden in ``outlier_kwargs``), to find outliers for
         each model separately; otherwise, the same filtering must be performed
         in a loop over models, which is almost an order of magnitude slower.
-    niter : int (optional)
+    niter : int, optional
         Number of iterations.
-    outlier_kwargs : dict (optional)
+    outlier_kwargs : dict, optional
         Keyword arguments for outlier_func.
     """
 
@@ -583,7 +594,7 @@ class FittingWithOutlierRemoval:
     def __str__(self):
         return ("Fitter: {0}\nOutlier function: {1}\nNum. of iterations: {2}" +
                 ("\nOutlier func. args.: {3}"))\
-                .format(self.fitter__class__.__name__,
+                .format(self.fitter.__class__.__name__,
                         self.outlier_func.__name__, self.niter,
                         self.outlier_kwargs)
 
@@ -603,15 +614,15 @@ class FittingWithOutlierRemoval:
             An analytic model which will be fit to the provided data.
             This also contains the initial guess for an optimization
             algorithm.
-        x : array-like
+        x : array_like
             Input coordinates.
-        y : array-like
+        y : array_like
             Data measurements (1D case) or input coordinates (2D case).
-        z : array-like (optional)
+        z : array_like, optional
             Data measurements (2D case).
-        weights : array-like (optional)
+        weights : array_like, optional
             Weights to be passed to the fitter.
-        kwargs : dict (optional)
+        kwargs : dict, optional
             Keyword arguments to be passed to the fitter.
 
         Returns
@@ -648,7 +659,7 @@ class FittingWithOutlierRemoval:
         # Construct input co-ordinate tuples for fitters & models that are
         # appropriate for the dimensionality being fitted:
         if z is None:
-            coords = x,
+            coords = (x, )
             data = y
         else:
             coords = x, y
@@ -838,9 +849,9 @@ class LevMarLSQFitter(metaclass=_FitterMeta):
            input coordinates
         y : array
            input coordinates
-        z : array (optional)
+        z : array, optional
            input coordinates
-        weights : array (optional)
+        weights : array, optional
             Weights for fitting.
             For data with Gaussian uncertainties, the weights should be
             1/sigma.
@@ -948,13 +959,13 @@ class LevMarLSQFitter(metaclass=_FitterMeta):
             return [np.ravel(_) for _ in residues]
         else:
             if z is None:
-                return [np.ravel(_) for _ in np.ravel(weights) * np.array(model.fit_deriv(x, *params))]
+                return [np.ravel(_) for _ in np.ravel(weights) *
+                        np.array(model.fit_deriv(x, *params))]
             else:
                 if not model.col_fit_deriv:
-                    return [np.ravel(_) for _ in (
-                        np.ravel(weights) * np.array(model.fit_deriv(x, y, *params)).T).T]
-                else:
-                    return [np.ravel(_) for _ in (weights * np.array(model.fit_deriv(x, y, *params)))]
+                    return [np.ravel(_) for _ in
+                            (np.ravel(weights) * np.array(model.fit_deriv(x, y, *params)).T).T]
+                return [np.ravel(_) for _ in weights * np.array(model.fit_deriv(x, y, *params))]
 
 
 class SLSQPLSQFitter(Fitter):
@@ -988,9 +999,9 @@ class SLSQPLSQFitter(Fitter):
             input coordinates
         y : array
             input coordinates
-        z : array (optional)
+        z : array, optional
             input coordinates
-        weights : array (optional)
+        weights : array, optional
             Weights for fitting.
             For data with Gaussian uncertainties, the weights should be
             1/sigma.
@@ -1020,9 +1031,9 @@ class SLSQPLSQFitter(Fitter):
         model_copy = _validate_model(model, self._opt_method.supported_constraints)
         farg = _convert_input(x, y, z)
         farg = (model_copy, weights, ) + farg
-        p0, _ = _model_to_fit_params(model_copy)
+        init_values, _ = _model_to_fit_params(model_copy)
         fitparams, self.fit_info = self._opt_method(
-            self.objective_function, p0, farg, **kwargs)
+            self.objective_function, init_values, farg, **kwargs)
         _fitter_to_model_params(model_copy, fitparams)
 
         return model_copy
@@ -1059,9 +1070,9 @@ class SimplexLSQFitter(Fitter):
             input coordinates
         y : array
             input coordinates
-        z : array (optional)
+        z : array, optional
             input coordinates
-        weights : array (optional)
+        weights : array, optional
             Weights for fitting.
             For data with Gaussian uncertainties, the weights should be
             1/sigma.
@@ -1087,10 +1098,10 @@ class SimplexLSQFitter(Fitter):
         farg = _convert_input(x, y, z)
         farg = (model_copy, weights, ) + farg
 
-        p0, _ = _model_to_fit_params(model_copy)
+        init_values, _ = _model_to_fit_params(model_copy)
 
         fitparams, self.fit_info = self._opt_method(
-            self.objective_function, p0, farg, **kwargs)
+            self.objective_function, init_values, farg, **kwargs)
         _fitter_to_model_params(model_copy, fitparams)
         return model_copy
 
@@ -1189,14 +1200,14 @@ class JointFitter(metaclass=_FitterMeta):
     def _verify_input(self):
         if len(self.models) <= 1:
             raise TypeError("Expected >1 models, {} is given".format(
-                    len(self.models)))
+                len(self.models)))
         if len(self.jointparams.keys()) < 2:
             raise TypeError("At least two parameters are expected, "
                             "{} is given".format(len(self.jointparams.keys())))
         for j in self.jointparams.keys():
             if len(self.jointparams[j]) != len(self.initvals):
                 raise TypeError("{} parameter(s) provided but {} expected".format(
-                        len(self.jointparams[j]), len(self.initvals)))
+                    len(self.jointparams[j]), len(self.initvals)))
 
     def __call__(self, *args):
         """
@@ -1336,6 +1347,9 @@ def _fitter_to_model_params(model, fps):
         parameters[slice_] = values
         offset += size
 
+    # Update model parameters before calling ``tied`` constraints.
+    model._array_to_parameters()
+
     # This has to be done in a separate loop due to how tied parameters are
     # currently evaluated (the fitted parameters need to actually be *set* on
     # the model first, for use in evaluating the "tied" expression--it might be
@@ -1345,8 +1359,11 @@ def _fitter_to_model_params(model, fps):
             if model.tied[name]:
                 value = model.tied[name](model)
                 slice_ = param_metrics[name]['slice']
+
+                # To handle multiple tied constraints, model parameters
+                # need to be updated after each iterration.
                 parameters[slice_] = value
-    model._array_to_parameters()
+                model._array_to_parameters()
 
 
 def _model_to_fit_params(model):
@@ -1370,8 +1387,7 @@ def _model_to_fit_params(model):
                 del params[slice_]
                 del fitparam_indices[idx]
         return (np.array(params), fitparam_indices)
-    else:
-        return (model.parameters, fitparam_indices)
+    return (model.parameters, fitparam_indices)
 
 
 def _validate_constraints(supported_constraints, model):
@@ -1382,16 +1398,16 @@ def _validate_constraints(supported_constraints, model):
     if (any(model.fixed.values()) and
             'fixed' not in supported_constraints):
         raise UnsupportedConstraintError(
-                message.format('fixed parameter'))
+            message.format('fixed parameter'))
 
     if any(model.tied.values()) and 'tied' not in supported_constraints:
         raise UnsupportedConstraintError(
-                message.format('tied parameter'))
+            message.format('tied parameter'))
 
     if (any(tuple(b) != (None, None) for b in model.bounds.values()) and
             'bounds' not in supported_constraints):
         raise UnsupportedConstraintError(
-                message.format('bound parameter'))
+            message.format('bound parameter'))
 
     if model.eqcons and 'eqcons' not in supported_constraints:
         raise UnsupportedConstraintError(message.format('equality'))
@@ -1434,6 +1450,7 @@ def populate_entry_points(entry_points):
                   entry_points are objects which encapsulate
                   importable objects and are defined on the
                   installation of a package.
+
     Notes
     -----
     An explanation of entry points can be found `here <http://setuptools.readthedocs.io/en/latest/setuptools.html#dynamic-discovery-of-services-and-plugins>`
@@ -1446,13 +1463,12 @@ def populate_entry_points(entry_points):
             entry_point = entry_point.load()
         except Exception as e:
             # This stops the fitting from choking if an entry_point produces an error.
-            warnings.warn(AstropyUserWarning('{type} error occurred in entry '
-                                             'point {name}.' .format(type=type(e).__name__, name=name)))
+            warnings.warn(AstropyUserWarning(
+                f'{type(e).__name__} error occurred in entry point {name}.'))
         else:
             if not inspect.isclass(entry_point):
                 warnings.warn(AstropyUserWarning(
-                    'Modeling entry point {} expected to be a '
-                    'Class.' .format(name)))
+                    f'Modeling entry point {name} expected to be a Class.'))
             else:
                 if issubclass(entry_point, Fitter):
                     name = entry_point.__name__

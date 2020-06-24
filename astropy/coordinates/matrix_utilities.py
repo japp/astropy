@@ -46,7 +46,7 @@ def rotation_matrix(angle, axis='z', unit=None):
     ----------
     angle : convertible to `~astropy.coordinates.Angle`
         The amount of rotation the matrices should represent.  Can be an array.
-    axis : str, or array-like
+    axis : str or array_like
         Either ``'x'``, ``'y'``, ``'z'``, or a (x,y,z) specifying the axis to
         rotate about. If ``'x'``, ``'y'``, or ``'z'``, the rotation sense is
         counterclockwise looking down the + axis (e.g. positive rotations obey
@@ -61,10 +61,13 @@ def rotation_matrix(angle, axis='z', unit=None):
     rmat : `numpy.matrix`
         A unitary rotation matrix.
     """
-    if unit is None:
-        unit = u.degree
-
-    angle = Angle(angle, unit=unit)
+    if isinstance(angle, u.Quantity):
+        angle = angle.to_value(u.radian)
+    else:
+        if unit is None:
+            angle = np.deg2rad(angle)
+        else:
+            angle = u.Unit(unit).to(u.rad, angle)
 
     s = np.sin(angle)
     c = np.cos(angle)
@@ -88,7 +91,7 @@ def rotation_matrix(angle, axis='z', unit=None):
     else:
         a1 = (i + 1) % 3
         a2 = (i + 2) % 3
-        R = np.zeros(angle.shape + (3, 3))
+        R = np.zeros(getattr(angle, 'shape', ()) + (3, 3))
         R[..., i, i] = 1.
         R[..., a1, a1] = c
         R[..., a1, a2] = s
@@ -104,7 +107,7 @@ def angle_axis(matrix):
 
     Parameters
     ----------
-    matrix : array-like
+    matrix : array_like
         A 3 x 3 unitary rotation matrix (or stack of matrices).
 
     Returns

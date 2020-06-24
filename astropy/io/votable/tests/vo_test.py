@@ -23,7 +23,7 @@ from numpy.testing import assert_array_equal
 # LOCAL
 from astropy.io.votable.table import parse, parse_single_table, validate
 from astropy.io.votable import tree
-from astropy.io.votable.exceptions import VOTableSpecError, VOWarning
+from astropy.io.votable.exceptions import VOTableSpecError, VOWarning, W39
 from astropy.io.votable.xmlutil import validate_schema
 from astropy.utils.data import get_pkg_data_filename, get_pkg_data_filenames
 from astropy.tests.helper import raises, catch_warnings
@@ -75,10 +75,10 @@ def _test_regression(tmpdir, _python_based=False, binary_mode=1):
 
     dtypes = [
         (('string test', 'string_test'), '|O8'),
-        (('fixed string test', 'string_test_2'), '|S10'),
+        (('fixed string test', 'string_test_2'), '<U10'),
         ('unicode_test', '|O8'),
         (('unicode test', 'fixed_unicode_test'), '<U10'),
-        (('string array test', 'string_array_test'), '|S4'),
+        (('string array test', 'string_array_test'), '<U4'),
         ('unsignedByte', '|u1'),
         ('short', '<i2'),
         ('int', '<i4'),
@@ -173,22 +173,29 @@ def _test_regression(tmpdir, _python_based=False, binary_mode=1):
 
 @pytest.mark.xfail('legacy_float_repr')
 def test_regression(tmpdir):
-    _test_regression(tmpdir, False)
+    # W39: Bit values can not be masked
+    with pytest.warns(W39):
+        _test_regression(tmpdir, False)
 
 
 @pytest.mark.xfail('legacy_float_repr')
 def test_regression_python_based_parser(tmpdir):
-    _test_regression(tmpdir, True)
+    # W39: Bit values can not be masked
+    with pytest.warns(W39):
+        _test_regression(tmpdir, True)
 
 
 @pytest.mark.xfail('legacy_float_repr')
 def test_regression_binary2(tmpdir):
-    _test_regression(tmpdir, False, 2)
+    # W39: Bit values can not be masked
+    with pytest.warns(W39):
+        _test_regression(tmpdir, False, 2)
 
 
 class TestFixups:
     def setup_class(self):
-        self.table = parse(get_pkg_data_filename('data/regression.xml')).get_first_table()
+        self.table = parse(
+            get_pkg_data_filename('data/regression.xml')).get_first_table()
         self.array = self.table.array
         self.mask = self.table.array.mask
 
@@ -239,10 +246,10 @@ class TestReferences:
 def test_select_columns_by_index():
     columns = [0, 5, 13]
     table = parse(
-        get_pkg_data_filename('data/regression.xml'), columns=columns).get_first_table()
+        get_pkg_data_filename('data/regression.xml'), columns=columns).get_first_table()  # noqa
     array = table.array
     mask = table.array.mask
-    assert array['string_test'][0] == b"String & test"
+    assert array['string_test'][0] == "String & test"
     columns = ['string_test', 'unsignedByte', 'bitarray']
     for c in columns:
         assert not np.all(mask[c])
@@ -252,10 +259,10 @@ def test_select_columns_by_index():
 def test_select_columns_by_name():
     columns = ['string_test', 'unsignedByte', 'bitarray']
     table = parse(
-        get_pkg_data_filename('data/regression.xml'), columns=columns).get_first_table()
+        get_pkg_data_filename('data/regression.xml'), columns=columns).get_first_table()  # noqa
     array = table.array
     mask = table.array.mask
-    assert array['string_test'][0] == b"String & test"
+    assert array['string_test'][0] == "String & test"
     for c in columns:
         assert not np.all(mask[c])
     assert np.all(mask['unicode_test'])
@@ -273,15 +280,14 @@ class TestParse:
                           np.object_)
         assert_array_equal(
             self.array['string_test'],
-            [b'String & test', b'String &amp; test', b'XXXX',
-             b'', b''])
+            ['String & test', 'String &amp; test', 'XXXX', '', ''])
 
     def test_fixed_string_test(self):
         assert issubclass(self.array['string_test_2'].dtype.type,
-                          np.string_)
+                          np.unicode_)
         assert_array_equal(
             self.array['string_test_2'],
-            [b'Fixed stri', b'0123456789', b'XXXX', b'', b''])
+            ['Fixed stri', '0123456789', 'XXXX', '', ''])
 
     def test_unicode_test(self):
         assert issubclass(self.array['unicode_test'].dtype.type,
@@ -596,7 +602,9 @@ class TestThroughTableData(TestParse):
         votable = parse(get_pkg_data_filename('data/regression.xml'))
 
         self.xmlout = bio = io.BytesIO()
-        votable.to_xml(bio)
+        # W39: Bit values can not be masked
+        with pytest.warns(W39):
+            votable.to_xml(bio)
         bio.seek(0)
         self.votable = parse(bio)
         self.table = self.votable.get_first_table()
@@ -628,7 +636,9 @@ class TestThroughBinary(TestParse):
         votable.get_first_table().format = 'binary'
 
         self.xmlout = bio = io.BytesIO()
-        votable.to_xml(bio)
+        # W39: Bit values can not be masked
+        with pytest.warns(W39):
+            votable.to_xml(bio)
         bio.seek(0)
         self.votable = parse(bio)
 
@@ -657,7 +667,9 @@ class TestThroughBinary2(TestParse):
         votable.get_first_table().format = 'binary2'
 
         self.xmlout = bio = io.BytesIO()
-        votable.to_xml(bio)
+        # W39: Bit values can not be masked
+        with pytest.warns(W39):
+            votable.to_xml(bio)
         bio.seek(0)
         self.votable = parse(bio)
 
@@ -705,7 +717,8 @@ def table_from_scratch():
 
 def test_open_files():
     for filename in get_pkg_data_filenames('data', pattern='*.xml'):
-        if filename.endswith('custom_datatype.xml'):
+        if (filename.endswith('custom_datatype.xml') or
+                filename.endswith('timesys_errors.xml')):
             continue
         parse(filename)
 
@@ -729,8 +742,10 @@ def test_build_from_scratch(tmpdir):
 
     # Define some fields
     table.fields.extend([
-        tree.Field(votable, ID="filename", datatype="char"),
-        tree.Field(votable, ID="matrix", datatype="double", arraysize="2x2")])
+        tree.Field(votable, ID="filename", name='filename', datatype="char",
+                   arraysize='1'),
+        tree.Field(votable, ID="matrix", name='matrix', datatype="double",
+                   arraysize="2x2")])
 
     # Now, use those field definitions to create the numpy record arrays, with
     # the given number of rows
@@ -777,7 +792,7 @@ def test_validate(test_path_object=False):
 
     # Uncomment to generate new groundtruth
     # with open('validation.txt', 'wt', encoding='utf-8') as fd:
-    #     fd.write(u''.join(output))
+    #    fd.write(u''.join(output))
 
     with open(
         get_pkg_data_filename('data/validation.txt'),
@@ -815,11 +830,10 @@ def test_validate_path_object():
 def test_gzip_filehandles(tmpdir):
     votable = parse(get_pkg_data_filename('data/regression.xml'))
 
-    with open(str(tmpdir.join("regression.compressed.xml")), 'wb') as fd:
-        votable.to_xml(
-            fd,
-            compressed=True,
-            _astropy_version="testing")
+    # W39: Bit values can not be masked
+    with pytest.warns(W39):
+        with open(str(tmpdir.join("regression.compressed.xml")), 'wb') as fd:
+            votable.to_xml(fd, compressed=True, _astropy_version="testing")
 
     with open(str(tmpdir.join("regression.compressed.xml")), 'rb') as fd:
         votable = parse(fd)
@@ -983,3 +997,52 @@ def test_custom_datatype():
 
     table = votable.get_first_table()
     assert table.array.dtype['foo'] == np.int32
+
+
+def _timesys_tests(votable):
+    assert len(list(votable.iter_timesys())) == 4
+
+    timesys = votable.get_timesys_by_id('time_frame')
+    assert timesys.timeorigin == 2455197.5
+    assert timesys.timescale == 'TCB'
+    assert timesys.refposition == 'BARYCENTER'
+
+    timesys = votable.get_timesys_by_id('mjd_origin')
+    assert timesys.timeorigin == 'MJD-origin'
+    assert timesys.timescale == 'TDB'
+    assert timesys.refposition == 'EMBARYCENTER'
+
+    timesys = votable.get_timesys_by_id('jd_origin')
+    assert timesys.timeorigin == 'JD-origin'
+    assert timesys.timescale == 'TT'
+    assert timesys.refposition == 'HELIOCENTER'
+
+    timesys = votable.get_timesys_by_id('no_origin')
+    assert timesys.timeorigin is None
+    assert timesys.timescale == 'UTC'
+    assert timesys.refposition == 'TOPOCENTER'
+
+
+def test_timesys():
+    votable = parse(get_pkg_data_filename('data/timesys.xml'))
+    _timesys_tests(votable)
+
+
+def test_timesys_roundtrip():
+    orig_votable = parse(get_pkg_data_filename('data/timesys.xml'))
+    bio = io.BytesIO()
+    orig_votable.to_xml(bio)
+    bio.seek(0)
+    votable = parse(bio)
+    _timesys_tests(votable)
+
+
+def test_timesys_errors():
+    output = io.StringIO()
+    validate(get_pkg_data_filename('data/timesys_errors.xml'), output,
+             xmllint=False)
+    outstr = output.getvalue()
+    assert("E23: Invalid timeorigin attribute 'bad-origin'" in outstr)
+    assert("E22: ID attribute is required for all TIMESYS elements" in outstr)
+    assert("W48: Unknown attribute 'refposition_mispelled' on TIMESYS"
+           in outstr)

@@ -4,7 +4,7 @@
 This module tests some of the methods related to the ``ECSV``
 reader/writer.
 
-Requires `pyyaml <http://pyyaml.org/>`_ to be installed.
+Requires `pyyaml <https://pyyaml.org/>`_ to be installed.
 """
 import os
 import copy
@@ -16,7 +16,9 @@ import numpy as np
 
 from astropy.table import Table, Column, QTable, NdarrayMixin
 from astropy.table.table_helpers import simple_table
-from astropy.coordinates import SkyCoord, Latitude, Longitude, Angle, EarthLocation
+from astropy.coordinates import (SkyCoord, Latitude, Longitude, Angle, EarthLocation,
+                                 SphericalRepresentation, CartesianRepresentation,
+                                 SphericalCosLatDifferential)
 from astropy.time import Time, TimeDelta
 from astropy.units import allclose as quantity_allclose
 from astropy.units import QuantityInfo
@@ -27,7 +29,7 @@ from astropy.io import ascii
 from astropy import units as u
 
 try:
-    import yaml  # pylint: disable=W0611
+    import yaml  # noqa
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
@@ -134,10 +136,10 @@ def test_write_read_roundtrip():
         t.write(out, format='ascii.ecsv', delimiter=delimiter)
 
         t2s = [Table.read(out.getvalue(), format='ascii.ecsv'),
-                Table.read(out.getvalue(), format='ascii'),
-                ascii.read(out.getvalue()),
-                ascii.read(out.getvalue(), format='ecsv', guess=False),
-                ascii.read(out.getvalue(), format='ecsv')]
+               Table.read(out.getvalue(), format='ascii'),
+               ascii.read(out.getvalue()),
+               ascii.read(out.getvalue(), format='ecsv', guess=False),
+               ascii.read(out.getvalue(), format='ecsv')]
         for t2 in t2s:
             assert t.meta == t2.meta
             for name in t.colnames:
@@ -184,11 +186,16 @@ def test_multidim_input():
     """
     Multi-dimensional column in input
     """
-    t = Table([np.arange(4).reshape(2, 2)], names=['a'])
+    t = Table([np.arange(4).reshape(2, 2), [1, 2]], names=['a', 'b'])
     out = StringIO()
-    with pytest.raises(ValueError) as err:
+    with pytest.raises(ValueError,
+                       match="ECSV format does not support multidimensional column 'a'"):
         t.write(out, format='ascii.ecsv')
-    assert 'ECSV format does not support multidimensional column' in str(err.value)
+
+    # Now check that the hint works
+    names = [name for name in t.colnames if len(t[name].shape) <= 1]
+    assert names == ['b']
+    ascii.write(t[names], out, format='ecsv')
 
 
 @pytest.mark.skipif('not HAS_YAML')
@@ -222,8 +229,8 @@ def test_regression_5604():
     See https://github.com/astropy/astropy/issues/5604 for more.
     """
     t = Table()
-    t.meta = {"foo": 5*u.km, "foo2": u.s}
-    t["bar"] = [7]*u.km
+    t.meta = {"foo": 5 * u.km, "foo2": u.s}
+    t["bar"] = [7] * u.km
 
     out = StringIO()
     t.write(out, format="ascii.ecsv")
@@ -254,7 +261,15 @@ def assert_objects_equal(obj1, obj2, attrs, compare_class=True):
             assert np.all(a1 == a2)
 
 
+# TODO: unify with the very similar tests in fits/tests/test_connect.py.
 el = EarthLocation(x=[1, 2] * u.km, y=[3, 4] * u.km, z=[5, 6] * u.km)
+sr = SphericalRepresentation(
+    [0, 1]*u.deg, [2, 3]*u.deg, 1*u.kpc)
+cr = CartesianRepresentation(
+    [0, 1]*u.pc, [4, 5]*u.pc, [8, 6]*u.pc)
+sd = SphericalCosLatDifferential(
+    [0, 1]*u.mas/u.yr, [0, 1]*u.mas/u.yr, 10*u.km/u.s)
+srd = SphericalRepresentation(sr, differentials=sd)
 sc = SkyCoord([1, 2], [3, 4], unit='deg,deg', frame='fk4',
               obstime='J1990.5')
 scc = sc.copy()
@@ -264,7 +279,9 @@ tm2 = Time(tm, format='iso')
 tm3 = Time(tm, location=el)
 tm3.info.serialize_method['ecsv'] = 'jd1_jd2'
 
-
+# NOTE: in the test below the name of the column "x" for the Quantity is
+# important since it tests the fix for #10215 (namespace clash, where "x"
+# clashes with "el.x").
 mixin_cols = {
     'tm': tm,
     'tm2': tm2,
@@ -274,11 +291,18 @@ mixin_cols = {
     'scc': scc,
     'scd': SkyCoord([1, 2], [3, 4], [5, 6], unit='deg,deg,m', frame='fk4',
                     obstime=['J1990.5'] * 2),
-    'q': [1, 2] * u.m,
+    'x': [1, 2] * u.m,
+    'qdb': [10, 20] * u.dB(u.mW),
+    'qdex': [4.5, 5.5] * u.dex(u.cm / u.s**2),
+    'qmag': [21, 22] * u.ABmag,
     'lat': Latitude([1, 2] * u.deg),
-    'lon': Longitude([1, 2] * u.deg, wrap_angle=180.*u.deg),
+    'lon': Longitude([1, 2] * u.deg, wrap_angle=180. * u.deg),
     'ang': Angle([1, 2] * u.deg),
     'el': el,
+    'sr': sr,
+    'cr': cr,
+    'sd': sd,
+    'srd': srd,
     # 'nd': NdarrayMixin(el)  # not supported yet
 }
 
@@ -294,12 +318,20 @@ compare_attrs = {
     'sc': ['ra', 'dec', 'representation_type', 'frame.name'],
     'scc': ['x', 'y', 'z', 'representation_type', 'frame.name'],
     'scd': ['ra', 'dec', 'distance', 'representation_type', 'frame.name'],
-    'q': ['value', 'unit'],
+    'x': ['value', 'unit'],
+    'qdb': ['value', 'unit'],
+    'qdex': ['value', 'unit'],
+    'qmag': ['value', 'unit'],
     'lon': ['value', 'unit', 'wrap_angle'],
     'lat': ['value', 'unit'],
     'ang': ['value', 'unit'],
     'el': ['x', 'y', 'z', 'ellipsoid'],
     'nd': ['x', 'y', 'z'],
+    'sr': ['lon', 'lat', 'distance'],
+    'cr': ['x', 'y', 'z'],
+    'sd': ['d_lon_coslat', 'd_lat', 'd_distance'],
+    'srd': ['lon', 'lat', 'distance', 'differentials.s.d_lon_coslat',
+            'differentials.s.d_lat', 'differentials.s.d_distance'],
 }
 
 
@@ -363,19 +395,29 @@ def test_ecsv_mixins_as_one(table_cls):
     names = sorted(mixin_cols)
 
     serialized_names = ['ang',
+                        'cr.x', 'cr.y', 'cr.z',
                         'dt',
                         'el.x', 'el.y', 'el.z',
                         'lat',
                         'lon',
-                        'q',
+                        'qdb',
+                        'qdex',
+                        'qmag',
                         'sc.ra', 'sc.dec',
                         'scc.x', 'scc.y', 'scc.z',
                         'scd.ra', 'scd.dec', 'scd.distance',
                         'scd.obstime',
+                        'sd.d_lon_coslat', 'sd.d_lat', 'sd.d_distance',
+                        'sr.lon', 'sr.lat', 'sr.distance',
+                        'srd.lon', 'srd.lat', 'srd.distance',
+                        'srd.differentials.s.d_lon_coslat',
+                        'srd.differentials.s.d_lat',
+                        'srd.differentials.s.d_distance',
                         'tm',  # serialize_method is formatted_value
                         'tm2',  # serialize_method is formatted_value
                         'tm3.jd1', 'tm3.jd2',    # serialize is jd1_jd2
-                        'tm3.location.x', 'tm3.location.y', 'tm3.location.z']
+                        'tm3.location.x', 'tm3.location.y', 'tm3.location.z',
+                        'x']
 
     t = table_cls([mixin_cols[name] for name in names], names=names)
 

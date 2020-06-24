@@ -13,8 +13,8 @@ from astropy.config import set_temp_config, reload_config
 from astropy.utils.data import get_pkg_data_filename, get_pkg_data_fileobj
 from astropy.io.votable.table import parse, writeto
 from astropy.io.votable import tree, conf
-from astropy.io.votable.exceptions import VOWarning
-from astropy.tests.helper import catch_warnings
+from astropy.io.votable.exceptions import VOWarning, W39, E25
+from astropy.tests.helper import catch_warnings, raises
 from astropy.utils.exceptions import AstropyDeprecationWarning
 
 
@@ -63,11 +63,13 @@ def test_table(tmpdir):
     for field, type in zip(t.fields, field_types):
         name, d = type
         assert field.ID == name
-        assert field.datatype == d['datatype']
+        assert field.datatype == d['datatype'], f'{name} expected {d["datatype"]} but get {field.datatype}'  # noqa
         if 'arraysize' in d:
             assert field.arraysize == d['arraysize']
 
-    writeto(votable2, os.path.join(str(tmpdir), "through_table.xml"))
+    # W39: Bit values can not be masked
+    with pytest.warns(W39):
+        writeto(votable2, os.path.join(str(tmpdir), "through_table.xml"))
 
 
 def test_read_through_table_interface(tmpdir):
@@ -82,7 +84,10 @@ def test_read_through_table_interface(tmpdir):
     assert t['float'].format is None
 
     fn = os.path.join(str(tmpdir), "table_interface.xml")
-    t.write(fn, table_id='FOO', format='votable')
+
+    # W39: Bit values can not be masked
+    with pytest.warns(W39):
+        t.write(fn, table_id='FOO', format='votable')
 
     with open(fn, 'rb') as fd:
         t2 = Table.read(fd, format='votable', table_id='FOO')
@@ -163,14 +168,14 @@ def test_write_with_format():
     output = io.BytesIO()
     t.write(output, format='votable', tabledata_format="binary")
     obuff = output.getvalue()
-    assert b'VOTABLE version="1.3"' in obuff
+    assert b'VOTABLE version="1.4"' in obuff
     assert b'BINARY' in obuff
     assert b'TABLEDATA' not in obuff
 
     output = io.BytesIO()
     t.write(output, format='votable', tabledata_format="binary2")
     obuff = output.getvalue()
-    assert b'VOTABLE version="1.3"' in obuff
+    assert b'VOTABLE version="1.4"' in obuff
     assert b'BINARY2' in obuff
     assert b'TABLEDATA' not in obuff
 
@@ -179,6 +184,33 @@ def test_empty_table():
     votable = parse(get_pkg_data_filename('data/empty_table.xml'))
     table = votable.get_first_table()
     astropy_table = table.to_table()  # noqa
+
+
+def test_no_field_not_empty_table():
+    votable = parse(get_pkg_data_filename('data/no_field_not_empty_table.xml'))
+    table = votable.get_first_table()
+    assert len(table.fields) == 0
+    assert len(table.infos) == 1
+
+
+def test_no_field_not_empty_table_exception():
+    with pytest.raises(E25):
+        votable = parse(get_pkg_data_filename('data/no_field_not_empty_table.xml'), verify='exception')
+
+
+def test_binary2_masked_strings():
+    """
+    Issue #8995
+    """
+    # Read a VOTable which sets the null mask bit for each empty string value.
+    votable = parse(get_pkg_data_filename('data/binary2_masked_strings.xml'))
+    table = votable.get_first_table()
+    astropy_table = table.to_table()
+
+    # Ensure string columns have no masked values and can be written out
+    assert not np.any(table.array.mask['epoch_photometry_url'])
+    output = io.BytesIO()
+    astropy_table.write(output, format='votable')
 
 
 class TestVerifyOptions:
@@ -200,7 +232,7 @@ class TestVerifyOptions:
     def test_verify_warn(self):
         with catch_warnings(VOWarning) as w:
             parse(get_pkg_data_filename('data/gemini.xml'), verify='warn')
-        assert len(w) == 25
+        assert len(w) == 24
 
     def test_verify_exception(self):
         with pytest.raises(VOWarning):
@@ -211,7 +243,7 @@ class TestVerifyOptions:
     def test_pedantic_false(self):
         with catch_warnings(VOWarning, AstropyDeprecationWarning) as w:
             parse(get_pkg_data_filename('data/gemini.xml'), pedantic=False)
-        assert len(w) == 25
+        assert len(w) == 24
         # Make sure we don't yet emit a deprecation warning
         assert not any(isinstance(x.category, AstropyDeprecationWarning) for x in w)
 
@@ -231,7 +263,7 @@ class TestVerifyOptions:
         with conf.set_temp('verify', 'warn'):
             with catch_warnings(VOWarning) as w:
                 parse(get_pkg_data_filename('data/gemini.xml'))
-            assert len(w) == 25
+            assert len(w) == 24
 
     def test_conf_verify_exception(self):
         with conf.set_temp('verify', 'exception'):
@@ -251,7 +283,7 @@ class TestVerifyOptions:
 
             with catch_warnings(VOWarning, AstropyDeprecationWarning) as w:
                 parse(get_pkg_data_filename('data/gemini.xml'))
-            assert len(w) == 25
+            assert len(w) == 24
             # Make sure we don't yet emit a deprecation warning
             assert not any(isinstance(x.category, AstropyDeprecationWarning) for x in w)
 

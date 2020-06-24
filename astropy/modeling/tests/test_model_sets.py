@@ -2,11 +2,13 @@
 """
 This module tests model set evaluation for some common use cases.
 """
+# pylint: disable=invalid-name
 import pytest
 import numpy as np
 from numpy.testing import assert_allclose
 
-from astropy.modeling.models import Polynomial1D, Polynomial2D
+from astropy.modeling.models import (Polynomial1D, Polynomial2D,
+                                     Chebyshev2D)
 from astropy.modeling.fitting import LinearLSQFitter
 from astropy.modeling.core import Model
 from astropy.modeling.parameters import Parameter
@@ -22,7 +24,7 @@ class TParModel(Model):
     A toy model to test parameters machinery
     """
     # standard_broadasting = False
-    inputs = ('x',)
+    n_inputs = 1
     outputs = ('x',)
     coeff = Parameter()
     e = Parameter()
@@ -75,7 +77,7 @@ def test_model_axis_2():
     Test that a model initialized with model_set_axis=2
     can be evaluated with model_set_axis=False.
     """
-    p1 = Polynomial1D(1, c0=[[[1, 2,3 ]]], c1=[[[10, 20, 30]]],
+    p1 = Polynomial1D(1, c0=[[[1, 2, 3]]], c1=[[[10, 20, 30]]],
                       n_models=3, model_set_axis=2)
     t1 = Polynomial1D(1, c0=1, c1=10)
     t2 = Polynomial1D(1, c0=2, c1=20)
@@ -93,8 +95,8 @@ def test_model_axis_2():
     assert_allclose(y[:, :, 1].flatten(), t2(x))
     assert_allclose(y[:, :, 2].flatten(), t3(x))
 
-    p2 = Polynomial2D(1, c0_0=[[[0,1,2]]], c0_1=[[[3,4,5]]],
-                      c1_0=[[[5,6,7]]], n_models=3, model_set_axis=2)
+    p2 = Polynomial2D(1, c0_0=[[[0, 1, 2]]], c0_1=[[[3, 4, 5]]],
+                      c1_0=[[[5, 6, 7]]], n_models=3, model_set_axis=2)
     t1 = Polynomial2D(1, c0_0=0, c0_1=3, c1_0=5)
     t2 = Polynomial2D(1, c0_0=1, c0_1=4, c1_0=6)
     t3 = Polynomial2D(1, c0_0=2, c0_1=5, c1_0=7)
@@ -106,6 +108,13 @@ def test_model_axis_2():
     assert_allclose(y[:, :, 0].flatten(), t1(x, x))
     assert_allclose(y[:, :, 1].flatten(), t2(x, x))
     assert_allclose(y[:, :, 2].flatten(), t3(x, x))
+
+    cheb = Chebyshev2D(1, 1, c0_0=[[[0, 1, 2]]], c0_1=[[[3, 4, 5]]],
+                      c1_0=[[[5, 6, 7]]], c1_1=[[[1,1,1]]],
+                      n_models=3, model_set_axis=2)
+    assert cheb.c0_0.shape == (1, 1, 3)
+    y = cheb(x, x, model_set_axis=False)
+    assert y.shape == (1, 4, 3)
 
 
 def test_axis_0():
@@ -144,8 +153,8 @@ def test_axis_0():
 
 def test_negative_axis():
     p1 = Polynomial1D(1, c0=[1, 2], c1=[3, 4], n_models=2, model_set_axis=-1)
-    t1 = Polynomial1D(1, c0=1,c1=3)
-    t2 = Polynomial1D(1, c0=2,c1=4)
+    t1 = Polynomial1D(1, c0=1, c1=3)
+    t2 = Polynomial1D(1, c0=2, c1=4)
 
     with pytest.raises(ValueError):
         p1(x)
@@ -155,8 +164,8 @@ def test_negative_axis():
 
     xxt = xx.T
     y = p1(xxt)
-    assert_allclose(y[: ,0], t1(xxt[: ,0]))
-    assert_allclose(y[: ,1], t2(xxt[: ,1]))
+    assert_allclose(y[:, 0], t1(xxt[:, 0]))
+    assert_allclose(y[:, 1], t2(xxt[:, 1]))
 
 
 def test_shapes():
@@ -244,3 +253,8 @@ def test_model_set_axis_outputs():
     assert_allclose(y0[:, 1], y1[1])
     with pytest.raises(ValueError):
         model_set(x)
+
+
+def test_compound_model_sets():
+    with pytest.raises(ValueError):
+        Polynomial1D(1, n_models=2, model_set_axis=1) | Polynomial1D(1, n_models=2, model_set_axis=0)

@@ -13,7 +13,6 @@ import numpy as np
 from . import angle_utilities as util
 from astropy import units as u
 from astropy.utils import isiterable
-from astropy.utils.compat import NUMPY_LT_1_14_1, NUMPY_LT_1_14_2
 
 __all__ = ['Angle', 'Latitude', 'Longitude']
 
@@ -40,9 +39,13 @@ class Angle(u.SpecificTypeQuantity):
       Angle('1 2 0 hours')
       Angle(np.arange(1, 8), unit=u.deg)
       Angle('1°2′3″')
+      Angle('1°2′3″N')
       Angle('1d2m3.4s')
+      Angle('1d2m3.4sS')
       Angle('-1h2m3s')
+      Angle('-1h2m3sE')
       Angle('-1h2.5m')
+      Angle('-1h2.5mW')
       Angle('-1:2.5', unit=u.deg)
       Angle((10, 11, 12), unit='hourangle')  # (h, m, s)
       Angle((-1, 2, 3), unit=u.deg)  # (d, m, s)
@@ -249,7 +252,7 @@ class Angle(u.SpecificTypeQuantity):
             'unicode': {
                 u.degree: '°′″',
                 u.hourangle: 'ʰᵐˢ'}
-            }
+        }
 
         if sep == 'fromunit':
             if format not in separators:
@@ -430,14 +433,8 @@ class Angle(u.SpecificTypeQuantity):
         if self.isscalar:
             return self.to_string(format=format)
 
-        if NUMPY_LT_1_14_1 or not NUMPY_LT_1_14_2:
-            def formatter(x):
-                return x.to_string(format=format)
-        else:
-            # In numpy 1.14.1, array2print formatters get passed plain numpy scalars instead
-            # of subclass array scalars, so we need to recreate an array scalar.
-            def formatter(x):
-                return self._new_view(x).to_string(format=format)
+        def formatter(x):
+            return x.to_string(format=format)
 
         return np.array2string(self, formatter={'all': formatter})
 
@@ -526,7 +523,12 @@ class Latitude(Angle):
             angles = self
         lower = u.degree.to(angles.unit, -90.0)
         upper = u.degree.to(angles.unit, 90.0)
-        if np.any(angles.value < lower) or np.any(angles.value > upper):
+        # This invalid catch block can be removed when the minimum numpy
+        # version is >= 1.19 (NUMPY_LT_1_19)
+        with np.errstate(invalid='ignore'):
+            invalid_angles = (np.any(angles.value < lower) or
+                              np.any(angles.value > upper))
+        if invalid_angles:
             raise ValueError('Latitude angle(s) must be within -90 deg <= angle <= 90 deg, '
                              'got {}'.format(angles.to(u.degree)))
 
@@ -639,10 +641,13 @@ class Longitude(Angle):
         wrap_angle_floor = wrap_angle - a360
         self_angle = self.value
         # Do the wrapping, but only if any angles need to be wrapped
-        if np.any(self_angle < wrap_angle_floor) or np.any(self_angle >= wrap_angle):
-            wrapped = np.mod(self_angle - wrap_angle, a360) + wrap_angle_floor
-            value = u.Quantity(wrapped, self.unit)
-            super().__setitem__((), value)
+        #
+        # This invalid catch block can be removed when the minimum numpy
+        # version is >= 1.19 (NUMPY_LT_1_19)
+        with np.errstate(invalid='ignore'):
+            wraps = (self_angle - wrap_angle_floor) // a360
+        if np.any(wraps != 0):
+            self -= (wraps * a360) << self.unit
 
     @property
     def wrap_angle(self):

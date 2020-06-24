@@ -1,3 +1,5 @@
+# Licensed under a 3-clause BSD style license - see LICENSE.rst
+# pylint: disable=invalid-name, no-member
 from collections import OrderedDict
 
 import pytest
@@ -6,32 +8,37 @@ import numpy as np
 from astropy import units as u
 from astropy.tests.helper import assert_quantity_allclose
 
-from astropy.modeling.functional_models import (Gaussian1D,
-                                 Sersic1D, Sine1D, Linear1D,
-                                 Lorentz1D, Voigt1D, Const1D,
-                                 Box1D, Trapezoid1D, MexicanHat1D,
-                                 Moffat1D, Gaussian2D, Const2D, Ellipse2D,
-                                 Disk2D, Ring2D, Box2D, TrapezoidDisk2D,
-                                 MexicanHat2D, AiryDisk2D, Moffat2D, Sersic2D, KingProjectedAnalytic1D)
+from astropy.modeling.functional_models import (
+    Gaussian1D,
+    Sersic1D, Sine1D, Linear1D,
+    Lorentz1D, Voigt1D, Const1D,
+    Box1D, Trapezoid1D, RickerWavelet1D,
+    Moffat1D, Gaussian2D, Const2D, Ellipse2D,
+    Disk2D, Ring2D, Box2D, TrapezoidDisk2D,
+    RickerWavelet2D, AiryDisk2D, Moffat2D, Sersic2D,
+    KingProjectedAnalytic1D)
 
-from astropy.modeling.powerlaws import (PowerLaw1D, BrokenPowerLaw1D, SmoothlyBrokenPowerLaw1D,
-                         ExponentialCutoffPowerLaw1D, LogParabola1D)
+from astropy.modeling.physical_models import Plummer1D
+
+from astropy.modeling.powerlaws import (
+    PowerLaw1D, BrokenPowerLaw1D, SmoothlyBrokenPowerLaw1D,
+    ExponentialCutoffPowerLaw1D, LogParabola1D)
 
 from astropy.modeling.polynomial import Polynomial1D, Polynomial2D
 
 from astropy.modeling.fitting import LevMarLSQFitter
 
 try:
-    from scipy import optimize
+    from scipy import optimize  # noqa
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
 
 FUNC_MODELS_1D = [
 {'class': Gaussian1D,
-'parameters': {'amplitude': 3 * u.Jy, 'mean': 2 * u.m, 'stddev': 30 * u.cm},
-'evaluation': [(2600 * u.mm, 3 * u.Jy * np.exp(-2))],
-'bounding_box': [0.35, 3.65] * u.m},
+ 'parameters': {'amplitude': 3 * u.Jy, 'mean': 2 * u.m, 'stddev': 30 * u.cm},
+ 'evaluation': [(2600 * u.mm, 3 * u.Jy * np.exp(-2))],
+ 'bounding_box': [0.35, 3.65] * u.m},
 {'class': Sersic1D,
  'parameters': {'amplitude': 3 * u.MJy / u.sr, 'r_eff': 2 * u.arcsec, 'n': 4},
  'evaluation': [(3 * u.arcsec, 1.3237148119468918 * u.MJy/u.sr)],
@@ -65,7 +72,7 @@ FUNC_MODELS_1D = [
  'parameters': {'amplitude': 3 * u.Jy, 'x_0': 4.4 * u.um, 'width': 1 * u.um, 'slope': 5 * u.Jy / u.um},
  'evaluation': [(4200 * u.nm, 3 * u.Jy), (1 * u.m, 0 * u.Jy)],
  'bounding_box': [3.3, 5.5] * u.um},
-{'class': MexicanHat1D,
+{'class': RickerWavelet1D,
  'parameters': {'amplitude': 3 * u.Jy, 'x_0': 4.4 * u.um, 'sigma': 1e-3 * u.mm},
  'evaluation': [(1000 * u.nm, -0.09785050 * u.Jy)],
  'bounding_box': [-5.6, 14.4] * u.um},
@@ -78,12 +85,20 @@ FUNC_MODELS_1D = [
  'evaluation': [(0.5 * u.pc, 0.2 * u.Msun/u.pc**2)],
  'bounding_box': [0. * u.pc, 2. * u.pc]}
  ]
+
+PHYS_MODELS_1D = [
+{'class': Plummer1D,
+ 'parameters': {'mass': 3 * u.kg, 'r_plum': 0.5 * u.m},
+ 'evaluation': [(1* u.m, 0.10249381 * u.kg / (u.m **3))],
+ 'bounding_box': False}
+ ]
+
 FUNC_MODELS_2D = [
- {'class': Gaussian2D,
-  'parameters': {'amplitude': 3 * u.Jy, 'x_mean': 2 * u.m, 'y_mean': 1 * u.m,
-                 'x_stddev': 3 * u.m, 'y_stddev': 2 * u.m, 'theta': 45 * u.deg},
-  'evaluation': [(412.1320343 * u.cm, 3.121320343 * u.m, 3 * u.Jy * np.exp(-0.5))],
-  'bounding_box': [[-14.18257445, 16.18257445], [-10.75693665, 14.75693665]] * u.m},
+{'class': Gaussian2D,
+ 'parameters': {'amplitude': 3 * u.Jy, 'x_mean': 2 * u.m, 'y_mean': 1 * u.m,
+                'x_stddev': 3 * u.m, 'y_stddev': 2 * u.m, 'theta': 45 * u.deg},
+ 'evaluation': [(412.1320343 * u.cm, 3.121320343 * u.m, 3 * u.Jy * np.exp(-0.5))],
+ 'bounding_box': [[-14.18257445, 16.18257445], [-10.75693665, 14.75693665]] * u.m},
 {'class': Const2D,
  'parameters': {'amplitude': 3 * u.Jy},
  'evaluation': [(0.6 * u.micron, 0.2 * u.m, 3 * u.Jy)],
@@ -113,7 +128,7 @@ FUNC_MODELS_2D = [
                 'x_width': 4 * u.cm, 'y_width': 3 * u.s},
  'evaluation': [(301 * u.cm, 3 * u.s, 3 * u.Jy)],
  'bounding_box': [[0.5 * u.s, 3.5 * u.s], [2.98 * u.m, 3.02 * u.m]]},
-{'class': MexicanHat2D,
+{'class': RickerWavelet2D,
  'parameters': {'amplitude': 3 * u.Jy, 'x_0': 3 * u.m, 'y_0': 2 * u.m,
                 'sigma': 1 * u.m},
  'evaluation': [(4 * u.m, 2.5 * u.m, 0.602169107 * u.Jy)],
@@ -160,37 +175,37 @@ POWERLAW_MODELS = [
 ]
 
 POLY_MODELS = [
-    {'class': Polynomial1D,
-        'parameters': {'degree': 2, 'c0': 3 * u.one, 'c1': 2 / u.m, 'c2': 3 / u.m**2},
-        'evaluation': [(3 * u.m, 36 * u.one)],
-        'bounding_box': False},
-    {'class': Polynomial1D,
-        'parameters': {'degree': 2, 'c0': 3 * u.kg, 'c1': 2 * u.kg / u.m, 'c2': 3 * u.kg / u.m**2},
-        'evaluation': [(3 * u.m, 36 * u.kg)],
-        'bounding_box': False},
-    {'class': Polynomial1D,
-        'parameters': {'degree': 2, 'c0': 3 * u.kg, 'c1': 2 * u.kg, 'c2': 3 * u.kg},
-        'evaluation': [(3 * u.one, 36 * u.kg)],
-        'bounding_box': False},
-    {'class': Polynomial2D,
-        'parameters': {'degree': 2, 'c0_0': 3 * u.one, 'c1_0': 2 / u.m, 'c2_0': 3 / u.m**2,
-                       'c0_1': 3 / u.s, 'c0_2': -2 / u.s**2, 'c1_1': 5 / u.m / u.s},
-        'evaluation': [(3 * u.m, 2 * u.s, 64 * u.one)],
-        'bounding_box': False},
-    {'class': Polynomial2D,
-        'parameters': {'degree': 2, 'c0_0': 3 * u.kg, 'c1_0': 2 * u.kg / u.m, 'c2_0': 3 * u.kg / u.m**2,
-                       'c0_1': 3 * u.kg / u.s, 'c0_2': -2 * u.kg / u.s**2, 'c1_1': 5 * u.kg / u.m / u.s},
-        'evaluation': [(3 * u.m, 2 * u.s, 64 * u.kg)],
-        'bounding_box': False},
-    {'class': Polynomial2D,
-        'parameters': {'degree': 2, 'c0_0': 3 * u.kg, 'c1_0': 2 * u.kg, 'c2_0': 3 * u.kg,
-                       'c0_1': 3 * u.kg, 'c0_2': -2 * u.kg, 'c1_1': 5 * u.kg},
-        'evaluation': [(3 * u.one, 2 * u.one, 64 * u.kg)],
-        'bounding_box': False},
+{'class': Polynomial1D,
+ 'parameters': {'degree': 2, 'c0': 3 * u.one, 'c1': 2 / u.m, 'c2': 3 / u.m**2},
+ 'evaluation': [(3 * u.m, 36 * u.one)],
+ 'bounding_box': False},
+{'class': Polynomial1D,
+ 'parameters': {'degree': 2, 'c0': 3 * u.kg, 'c1': 2 * u.kg / u.m, 'c2': 3 * u.kg / u.m**2},
+ 'evaluation': [(3 * u.m, 36 * u.kg)],
+ 'bounding_box': False},
+{'class': Polynomial1D,
+ 'parameters': {'degree': 2, 'c0': 3 * u.kg, 'c1': 2 * u.kg, 'c2': 3 * u.kg},
+ 'evaluation': [(3 * u.one, 36 * u.kg)],
+ 'bounding_box': False},
+{'class': Polynomial2D,
+ 'parameters': {'degree': 2, 'c0_0': 3 * u.one, 'c1_0': 2 / u.m, 'c2_0': 3 / u.m**2,
+                'c0_1': 3 / u.s, 'c0_2': -2 / u.s**2, 'c1_1': 5 / u.m / u.s},
+ 'evaluation': [(3 * u.m, 2 * u.s, 64 * u.one)],
+ 'bounding_box': False},
+{'class': Polynomial2D,
+ 'parameters': {'degree': 2, 'c0_0': 3 * u.kg, 'c1_0': 2 * u.kg / u.m, 'c2_0': 3 * u.kg / u.m**2,
+                'c0_1': 3 * u.kg / u.s, 'c0_2': -2 * u.kg / u.s**2, 'c1_1': 5 * u.kg / u.m / u.s},
+ 'evaluation': [(3 * u.m, 2 * u.s, 64 * u.kg)],
+ 'bounding_box': False},
+{'class': Polynomial2D,
+ 'parameters': {'degree': 2, 'c0_0': 3 * u.kg, 'c1_0': 2 * u.kg, 'c2_0': 3 * u.kg,
+                'c0_1': 3 * u.kg, 'c0_2': -2 * u.kg, 'c1_1': 5 * u.kg},
+ 'evaluation': [(3 * u.one, 2 * u.one, 64 * u.kg)],
+ 'bounding_box': False},
  ]
 
 
-MODELS = FUNC_MODELS_1D + FUNC_MODELS_2D + POWERLAW_MODELS
+MODELS = FUNC_MODELS_1D + FUNC_MODELS_2D + POWERLAW_MODELS + PHYS_MODELS_1D
 
 SCIPY_MODELS = set([Sersic1D, Sersic2D, AiryDisk2D])
 
@@ -302,6 +317,9 @@ def test_models_bounding_box(model):
 
 
 @pytest.mark.skipif('not HAS_SCIPY')
+@pytest.mark.filterwarnings(r'ignore:.*:RuntimeWarning')
+@pytest.mark.filterwarnings(r'ignore:Model is linear in parameters.*')
+@pytest.mark.filterwarnings(r'ignore:The fit may be unsuccessful.*')
 @pytest.mark.parametrize('model', MODELS)
 def test_models_fitting(model):
 

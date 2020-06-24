@@ -15,9 +15,11 @@ from astropy.wcs import WCS, FITSFixedWarning
 from astropy.tests.helper import catch_warnings
 from astropy.utils import NumpyRNGContext
 from astropy.utils.data import (get_pkg_data_filename, get_pkg_data_filenames,
-                           get_pkg_data_contents)
+                                get_pkg_data_contents)
+from astropy.utils.exceptions import AstropyWarning
 
 from astropy.nddata.ccddata import CCDData
+from astropy.nddata import _testing as nd_testing
 from astropy.table import Table
 
 DEFAULT_DATA_SIZE = 100
@@ -119,6 +121,15 @@ def test_initialize_from_fits_with_invalid_unit_in_header(tmpdir):
     hdu.writeto(filename)
     with pytest.raises(ValueError):
         CCDData.read(filename)
+
+
+def test_initialize_from_fits_with_technically_invalid_but_not_really(tmpdir):
+    hdu = fits.PrimaryHDU(np.ones((2, 2)))
+    hdu.header['bunit'] = 'ELECTRONS/S'
+    filename = tmpdir.join('afile.fits').strpath
+    hdu.writeto(filename)
+    ccd = CCDData.read(filename)
+    assert ccd.unit == u.electron/u.s
 
 
 def test_initialize_from_fits_with_data_in_different_extension(tmpdir):
@@ -413,31 +424,40 @@ def test_arithmetic_no_wcs_compare():
 
 
 def test_arithmetic_with_wcs_compare():
-    def return_diff_smaller_3(first, second):
-        return abs(first - second) <= 3
+    def return_true(_, __):
+        return True
 
-    ccd1 = CCDData(np.ones((10, 10)), unit='', wcs=2)
-    ccd2 = CCDData(np.ones((10, 10)), unit='', wcs=5)
-    assert ccd1.add(ccd2, compare_wcs=return_diff_smaller_3).wcs == 2
-    assert ccd1.subtract(ccd2, compare_wcs=return_diff_smaller_3).wcs == 2
-    assert ccd1.multiply(ccd2, compare_wcs=return_diff_smaller_3).wcs == 2
-    assert ccd1.divide(ccd2, compare_wcs=return_diff_smaller_3).wcs == 2
+    wcs1, wcs2 = nd_testing.create_two_equal_wcs(naxis=2)
+    ccd1 = CCDData(np.ones((10, 10)), unit='', wcs=wcs1)
+    ccd2 = CCDData(np.ones((10, 10)), unit='', wcs=wcs2)
+    nd_testing.assert_wcs_seem_equal(
+        ccd1.add(ccd2, compare_wcs=return_true).wcs,
+        wcs1)
+    nd_testing.assert_wcs_seem_equal(
+        ccd1.subtract(ccd2, compare_wcs=return_true).wcs,
+        wcs1)
+    nd_testing.assert_wcs_seem_equal(
+        ccd1.multiply(ccd2, compare_wcs=return_true).wcs,
+        wcs1)
+    nd_testing.assert_wcs_seem_equal(
+        ccd1.divide(ccd2, compare_wcs=return_true).wcs,
+        wcs1)
 
 
 def test_arithmetic_with_wcs_compare_fail():
-    def return_diff_smaller_1(first, second):
-        return abs(first - second) <= 1
+    def return_false(_, __):
+        return False
 
-    ccd1 = CCDData(np.ones((10, 10)), unit='', wcs=2)
-    ccd2 = CCDData(np.ones((10, 10)), unit='', wcs=5)
+    ccd1 = CCDData(np.ones((10, 10)), unit='', wcs=WCS())
+    ccd2 = CCDData(np.ones((10, 10)), unit='', wcs=WCS())
     with pytest.raises(ValueError):
-        ccd1.add(ccd2, compare_wcs=return_diff_smaller_1).wcs
+        ccd1.add(ccd2, compare_wcs=return_false)
     with pytest.raises(ValueError):
-        ccd1.subtract(ccd2, compare_wcs=return_diff_smaller_1).wcs
+        ccd1.subtract(ccd2, compare_wcs=return_false)
     with pytest.raises(ValueError):
-        ccd1.multiply(ccd2, compare_wcs=return_diff_smaller_1).wcs
+        ccd1.multiply(ccd2, compare_wcs=return_false)
     with pytest.raises(ValueError):
-        ccd1.divide(ccd2, compare_wcs=return_diff_smaller_1).wcs
+        ccd1.divide(ccd2, compare_wcs=return_false)
 
 
 def test_arithmetic_overload_ccddata_operand():
@@ -633,13 +653,16 @@ def test_wcs_keywords_removed_from_header():
     keepers = set(_KEEP_THESE_KEYWORDS_IN_HEADER)
     data_file = get_pkg_data_filename('data/sip-wcs.fits')
     ccd = CCDData.read(data_file)
-    wcs_header = ccd.wcs.to_header()
+    with pytest.warns(AstropyWarning,
+                      match=r'Some non-standard WCS keywords were excluded'):
+        wcs_header = ccd.wcs.to_header()
     assert not (set(wcs_header) & set(ccd.meta) - keepers)
 
     # Make sure that exceptions are not raised when trying to remove missing
     # keywords. o4sp040b0_raw.fits of io.fits is missing keyword 'PC1_1'.
     data_file1 = get_pkg_data_filename('../../io/fits/tests/data/o4sp040b0_raw.fits')
-    ccd = CCDData.read(data_file1, unit='count')
+    with pytest.warns(FITSFixedWarning, match=r"'unitfix' made the change"):
+        ccd = CCDData.read(data_file1, unit='count')
 
 
 def test_wcs_SIP_coefficient_keywords_removed():
@@ -657,13 +680,12 @@ def test_wcs_SIP_coefficient_keywords_removed():
     # not being removed from the header even though they are WCS-related.
 
     data_file = get_pkg_data_filename('data/sip-wcs.fits')
+    test_keys = ['A_0_0', 'B_0_1']
 
     # Make sure the keywords added to this file for testing are there
-    hdu = fits.open(data_file)
-
-    test_keys = ['A_0_0', 'B_0_1']
-    for key in test_keys:
-        assert key in hdu[0].header
+    with fits.open(data_file) as hdu:
+        for key in test_keys:
+            assert key in hdu[0].header
 
     ccd = CCDData.read(data_file)
 
@@ -672,6 +694,7 @@ def test_wcs_SIP_coefficient_keywords_removed():
         assert key not in ccd.header
 
 
+@pytest.mark.filterwarnings('ignore')
 def test_wcs_keyword_removal_for_wcs_test_files():
     """
     Test, for the WCS test files, that keyword removal works as
@@ -777,9 +800,10 @@ def test_header():
 
 def test_wcs_arithmetic():
     ccd_data = create_ccd_data()
-    ccd_data.wcs = 5
+    wcs = WCS(naxis=2)
+    ccd_data.wcs = wcs
     result = ccd_data.multiply(1.0)
-    assert result.wcs == 5
+    nd_testing.assert_wcs_seem_equal(result.wcs, wcs)
 
 
 @pytest.mark.parametrize('operation',
@@ -787,10 +811,10 @@ def test_wcs_arithmetic():
 def test_wcs_arithmetic_ccd(operation):
     ccd_data = create_ccd_data()
     ccd_data2 = ccd_data.copy()
-    ccd_data.wcs = 5
+    ccd_data.wcs = WCS(naxis=2)
     method = getattr(ccd_data, operation)
     result = method(ccd_data2)
-    assert result.wcs == ccd_data.wcs
+    nd_testing.assert_wcs_seem_equal(result.wcs, ccd_data.wcs)
     assert ccd_data2.wcs is None
 
 
@@ -951,8 +975,9 @@ def test_read_old_style_multiextensionfits(tmpdir):
 
 def test_wcs():
     ccd_data = create_ccd_data()
-    ccd_data.wcs = 5
-    assert ccd_data.wcs == 5
+    wcs = WCS(naxis=2)
+    ccd_data.wcs = wcs
+    assert ccd_data.wcs is wcs
 
 
 def test_recognized_fits_formats_for_read_write(tmpdir):
@@ -996,3 +1021,15 @@ def test_read_returns_image(tmpdir):
     ccd = CCDData.read(filename, unit='adu')
     # Expecting to get (5, 5), the size of the image
     assert ccd.data.shape == (5, 5)
+
+
+# https://github.com/astropy/astropy/issues/9664
+def test_sliced_ccdata_to_hdu():
+    wcs = WCS(naxis=2)
+    wcs.wcs.crpix = 10, 10
+    ccd = CCDData(np.ones((10, 10)), wcs=wcs, unit='pixel')
+    trimmed = ccd[2:-2, 2:-2]
+    hdul = trimmed.to_hdu()
+    assert isinstance(hdul, fits.HDUList)
+    assert hdul[0].header['CRPIX1'] == 8
+    assert hdul[0].header['CRPIX2'] == 8

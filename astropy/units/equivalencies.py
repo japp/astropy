@@ -173,6 +173,7 @@ def spectral_density(wav, factor=None):
     la_f_la = nu_f_nu
     phot_f_la = astrophys.photon / (si.cm ** 2 * si.s * si.AA)
     phot_f_nu = astrophys.photon / (si.cm ** 2 * si.s * si.Hz)
+    la_phot_f_la = astrophys.photon / (si.cm ** 2 * si.s)
 
     # luminosity density
     L_nu = cgs.erg / si.s / si.Hz
@@ -181,6 +182,22 @@ def spectral_density(wav, factor=None):
     la_L_la = nu_L_nu
     phot_L_la = astrophys.photon / (si.s * si.AA)
     phot_L_nu = astrophys.photon / (si.s * si.Hz)
+
+    # surface brigthness (flux equiv)
+    S_la = cgs.erg / si.angstrom / si.cm ** 2 / si.s / si.sr
+    S_nu = cgs.erg / si.Hz / si.cm ** 2 / si.s / si.sr
+    nu_S_nu = cgs.erg / si.cm ** 2 / si.s / si.sr
+    la_S_la = nu_S_nu
+    phot_S_la = astrophys.photon / (si.cm ** 2 * si.s * si.AA * si.sr)
+    phot_S_nu = astrophys.photon / (si.cm ** 2 * si.s * si.Hz * si.sr)
+
+    # surface brightness (luminosity equiv)
+    SL_nu = cgs.erg / si.s / si.Hz / si.sr
+    SL_la = cgs.erg / si.s / si.angstrom / si.sr
+    nu_SL_nu = cgs.erg / si.s / si.sr
+    la_SL_la = nu_SL_nu
+    phot_SL_la = astrophys.photon / (si.s * si.AA * si.sr)
+    phot_SL_nu = astrophys.photon / (si.s * si.Hz * si.sr)
 
     def converter(x):
         return x * (wav.to_value(si.AA, spectral()) ** 2 / c_Aps)
@@ -254,6 +271,8 @@ def spectral_density(wav, factor=None):
         (phot_f_la, phot_f_nu, converter_phot_f_la_phot_f_nu, iconverter_phot_f_la_phot_f_nu),
         (phot_f_nu, f_nu, converter_phot_f_nu_to_f_nu, iconverter_phot_f_nu_to_f_nu),
         (phot_f_nu, f_la, converter_phot_f_nu_to_f_la, iconverter_phot_f_nu_to_f_la),
+        # integrated flux
+        (la_phot_f_la, la_f_la, converter_phot_f_la_to_f_la, iconverter_phot_f_la_to_f_la),
         # luminosity
         (L_la, L_nu, converter, iconverter),
         (L_nu, nu_L_nu, converter_L_nu_to_nu_L_nu, iconverter_L_nu_to_nu_L_nu),
@@ -263,6 +282,24 @@ def spectral_density(wav, factor=None):
         (phot_L_la, phot_L_nu, converter_phot_L_la_phot_L_nu, iconverter_phot_L_la_phot_L_nu),
         (phot_L_nu, L_nu, converter_phot_L_nu_to_L_nu, iconverter_phot_L_nu_to_L_nu),
         (phot_L_nu, L_la, converter_phot_L_nu_to_L_la, iconverter_phot_L_nu_to_L_la),
+        # surface brightness (flux equiv)
+        (S_la, S_nu, converter, iconverter),
+        (S_nu, nu_S_nu, converter_f_nu_to_nu_f_nu, iconverter_f_nu_to_nu_f_nu),
+        (S_la, la_S_la, converter_f_la_to_la_f_la, iconverter_f_la_to_la_f_la),
+        (phot_S_la, S_la, converter_phot_f_la_to_f_la, iconverter_phot_f_la_to_f_la),
+        (phot_S_la, S_nu, converter_phot_f_la_to_f_nu, iconverter_phot_f_la_to_f_nu),
+        (phot_S_la, phot_S_nu, converter_phot_f_la_phot_f_nu, iconverter_phot_f_la_phot_f_nu),
+        (phot_S_nu, S_nu, converter_phot_f_nu_to_f_nu, iconverter_phot_f_nu_to_f_nu),
+        (phot_S_nu, S_la, converter_phot_f_nu_to_f_la, iconverter_phot_f_nu_to_f_la),
+        # surface brightness (luminosity equiv)
+        (SL_la, SL_nu, converter, iconverter),
+        (SL_nu, nu_SL_nu, converter_L_nu_to_nu_L_nu, iconverter_L_nu_to_nu_L_nu),
+        (SL_la, la_SL_la, converter_L_la_to_la_L_la, iconverter_L_la_to_la_L_la),
+        (phot_SL_la, SL_la, converter_phot_L_la_to_L_la, iconverter_phot_L_la_to_L_la),
+        (phot_SL_la, SL_nu, converter_phot_L_la_to_L_nu, iconverter_phot_L_la_to_L_nu),
+        (phot_SL_la, phot_SL_nu, converter_phot_L_la_phot_L_nu, iconverter_phot_L_la_phot_L_nu),
+        (phot_SL_nu, SL_nu, converter_phot_L_nu_to_L_nu, iconverter_phot_L_nu_to_L_nu),
+        (phot_SL_nu, SL_la, converter_phot_L_nu_to_L_la, iconverter_phot_L_nu_to_L_la),
     ], "spectral_density", {'wav': wav, 'factor': factor})
 
 
@@ -505,7 +542,7 @@ def brightness_temperature(frequency, beam_area=None):
     commonly used in radio astronomy.  See, e.g., "Tools of Radio Astronomy"
     (Wilson 2009) eqn 8.16 and eqn 8.19 (these pages are available on `google
     books
-    <http://books.google.com/books?id=9KHw6R8rQEMC&pg=PA179&source=gbs_toc_r&cad=4#v=onepage&q&f=false>`__).
+    <https://books.google.com/books?id=9KHw6R8rQEMC&pg=PA179&source=gbs_toc_r&cad=4#v=onepage&q&f=false>`__).
 
     :math:`T_B \equiv S_\nu / \left(2 k \nu^2 / c^2 \right)`
 
@@ -676,15 +713,18 @@ def thermodynamic_temperature(frequency, T_cmb=None):
 
 
 def temperature():
-    """Convert between Kelvin, Celsius, and Fahrenheit here because
+    """Convert between Kelvin, Celsius, Rankine and Fahrenheit here because
     Unit and CompositeUnit cannot do addition or subtraction properly.
     """
-    from .imperial import deg_F
+    from .imperial import deg_F, deg_R
     return Equivalency([
         (si.K, si.deg_C, lambda x: x - 273.15, lambda x: x + 273.15),
         (si.deg_C, deg_F, lambda x: x * 1.8 + 32.0, lambda x: (x - 32.0) / 1.8),
         (si.K, deg_F, lambda x: (x - 273.15) * 1.8 + 32.0,
-         lambda x: ((x - 32.0) / 1.8) + 273.15)], "temperature")
+         lambda x: ((x - 32.0) / 1.8) + 273.15),
+        (deg_R, deg_F, lambda x: x - 459.67, lambda x: x + 459.67),
+        (deg_R, si.deg_C, lambda x: (x - 491.67) * (5/9), lambda x: x * 1.8 + 491.67),
+        (deg_R, si.K, lambda x: x * (5/9), lambda x: x * 1.8)], "temperature")
 
 
 def temperature_energy():
@@ -704,24 +744,29 @@ def assert_is_spectral_unit(value):
 
 def pixel_scale(pixscale):
     """
-    Convert between pixel distances (in units of ``pix``) and angular units,
+    Convert between pixel distances (in units of ``pix``) and other units,
     given a particular ``pixscale``.
 
     Parameters
     ----------
     pixscale : `~astropy.units.Quantity`
-        The pixel scale either in units of angle/pixel or pixel/angle.
+        The pixel scale either in units of <unit>/pixel or pixel/<unit>.
     """
-    if pixscale.unit.is_equivalent(si.arcsec/astrophys.pix):
-        pixscale_val = pixscale.to_value(si.radian/astrophys.pix)
-    elif pixscale.unit.is_equivalent(astrophys.pix/si.arcsec):
-        pixscale_val = (1/pixscale).to_value(si.radian/astrophys.pix)
-    else:
-        raise UnitsError("The pixel scale must be in angle/pixel or "
-                         "pixel/angle")
 
-    return Equivalency([(astrophys.pix, si.radian,
-                         lambda px: px*pixscale_val, lambda rad: rad/pixscale_val)],
+    decomposed = pixscale.unit.decompose()
+    dimensions = dict(zip(decomposed.bases, decomposed.powers))
+    pix_power = dimensions.get(astrophys.pix, 0)
+
+    if pix_power == -1:
+        physical_unit = Unit(pixscale * astrophys.pix)
+    elif pix_power == 1:
+        physical_unit = Unit(astrophys.pix / pixscale)
+    else:
+        raise UnitsError(
+                "The pixel scale unit must have"
+                " pixel dimensionality of 1 or -1.")
+
+    return Equivalency([(astrophys.pix, physical_unit)],
                        "pixel_scale", {'pixscale': pixscale})
 
 

@@ -11,8 +11,8 @@ from astropy.coordinates.transformations import (
     AffineTransform,
 )
 from astropy.coordinates.matrix_utilities import (rotation_matrix,
-                                matrix_product, matrix_transpose)
-from astropy.coordinates.representation import CartesianRepresentation
+                                                  matrix_product,
+                                                  matrix_transpose)
 from astropy import _erfa as erfa
 
 from .icrs import ICRS
@@ -43,7 +43,8 @@ def _true_ecliptic_rotation_matrix(equinox):
     # (see https://github.com/astropy/astropy/pull/6508).
     jd1, jd2 = get_jd12(equinox, 'tt')
     rnpb = erfa.pnm06a(jd1, jd2)
-    obl = erfa.obl06(jd1, jd2)*u.radian
+    _, nut_obl = erfa.nut06a(jd1, jd2)*u.radian
+    obl = erfa.obl06(jd1, jd2)*u.radian + nut_obl  # calculate the true obliquity of the ecliptic
     return matrix_product(rotation_matrix(obl, 'x'), rnpb)
 
 

@@ -2,19 +2,18 @@
 """
 Tests models.parameters
 """
-
+# pylint: disable=invalid-name
 
 import itertools
 
 import pytest
 import numpy as np
-from numpy.testing import utils
 
-from . import irafutil
 from astropy.modeling import models, fitting
 from astropy.modeling.core import Model, FittableModel
 from astropy.modeling.parameters import Parameter, InputParameterError
 from astropy.utils.data import get_pkg_data_filename
+from . import irafutil
 
 
 def setter1(val):
@@ -28,14 +27,11 @@ def setter2(val, model):
 
 class SetterModel(FittableModel):
 
-    inputs = ('x', 'y')
-    outputs = ('z',)
+    n_inputs = 2
+    n_outputs = 1
 
     xc = Parameter(default=1, setter=setter1)
     yc = Parameter(default=1, setter=setter2)
-
-    def evaluate(self, x, y, xc, yc):
-        return ((x - xc)**2 + (y - yc)**2)
 
     def do_something(self, v):
         pass
@@ -47,7 +43,7 @@ class SetterModel(FittableModel):
         self.yc = yc
 
     def evaluate(self, x, y, xc, yc):
-        return ((x - xc)**2 + (y - yc)**2)
+        return (x - xc)**2 + (y - yc)**2
 
     def do_something(self, v):
         pass
@@ -105,7 +101,6 @@ def test_parameter_properties():
     assert p.min is None
 
     assert p.max is None
-   # TODO: shouldn't setting a max < min give an error?
     p.max = 41
     assert p.max == 41
 
@@ -158,7 +153,7 @@ def test_parameter_inheritance():
     assert mod.m3d == 20.
     for key in ['m1a', 'm1b', 'm2c', 'm3d']:
         assert key in mod.__dict__
-    assert mod.param_names  == ('m1a', 'm1b', 'm2c', 'm3d')
+    assert mod.param_names == ('m1a', 'm1b', 'm2c', 'm3d')
 
 
 def test_param_metric():
@@ -276,27 +271,25 @@ class TestParameters:
         """
 
         new_model = self.linear_fitter(self.model, self.x, self.y)
-        utils.assert_allclose(new_model.parameters,
-                              np.array(
-                                  [4826.1066602783685, 952.8943813407858,
-                                   12.641236013982386,
-                                   -1.7910672553339604,
-                                   0.90252884366711317]),
-                              rtol=10 ** (-2))
+        np.testing.assert_allclose(
+            new_model.parameters,
+            np.array([4826.1066602783685, 952.8943813407858, 12.641236013982386,
+                      -1.7910672553339604, 0.90252884366711317]),
+            rtol=10 ** (-2))
 
     def testPolynomial1D(self):
         d = {'c0': 11, 'c1': 12, 'c2': 13, 'c3': 14}
         p1 = models.Polynomial1D(3, **d)
-        utils.assert_equal(p1.parameters, [11, 12, 13, 14])
+        np.testing.assert_equal(p1.parameters, [11, 12, 13, 14])
 
     def test_poly1d_multiple_sets(self):
         p1 = models.Polynomial1D(3, n_models=3)
-        utils.assert_equal(p1.parameters, [0.0, 0.0, 0.0, 0, 0, 0,
-                                           0, 0, 0, 0, 0, 0])
-        utils.assert_array_equal(p1.c0, [0, 0, 0])
+        np.testing.assert_equal(p1.parameters, [0.0, 0.0, 0.0, 0, 0, 0,
+                                                0, 0, 0, 0, 0, 0])
+        np.testing.assert_array_equal(p1.c0, [0, 0, 0])
         p1.c0 = [10, 10, 10]
-        utils.assert_equal(p1.parameters, [10.0, 10.0, 10.0, 0, 0,
-                                           0, 0, 0, 0, 0, 0, 0])
+        np.testing.assert_equal(p1.parameters, [10.0, 10.0, 10.0, 0, 0,
+                                                0, 0, 0, 0, 0, 0, 0])
 
     def test_par_slicing(self):
         """
@@ -304,20 +297,20 @@ class TestParameters:
         """
         p1 = models.Polynomial1D(3, n_models=3)
         p1.c0[:2] = [10, 10]
-        utils.assert_equal(p1.parameters, [10.0, 10.0, 0.0, 0, 0,
-                                           0, 0, 0, 0, 0, 0, 0])
+        np.testing.assert_equal(p1.parameters, [10.0, 10.0, 0.0, 0, 0,
+                                                0, 0, 0, 0, 0, 0, 0])
 
     def test_poly2d(self):
         p2 = models.Polynomial2D(degree=3)
         p2.c0_0 = 5
-        utils.assert_equal(p2.parameters, [5, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        np.testing.assert_equal(p2.parameters, [5, 0, 0, 0, 0, 0, 0, 0, 0, 0])
 
     def test_poly2d_multiple_sets(self):
         kw = {'c0_0': [2, 3], 'c1_0': [1, 2], 'c2_0': [4, 5],
               'c0_1': [1, 1], 'c0_2': [2, 2], 'c1_1': [5, 5]}
         p2 = models.Polynomial2D(2, **kw)
-        utils.assert_equal(p2.parameters, [2, 3, 1, 2, 4, 5,
-                                           1, 1, 2, 2, 5, 5])
+        np.testing.assert_equal(p2.parameters, [2, 3, 1, 2, 4, 5,
+                                                1, 1, 2, 2, 5, 5])
 
     def test_shift_model_parameters1d(self):
         sh1 = models.Shift(2)
@@ -329,7 +322,7 @@ class TestParameters:
         sc1 = models.Scale([2, 2])
         sc1.factor = [3, 3]
         assert np.all(sc1.factor == [3, 3])
-        utils.assert_array_equal(sc1.factor.value, [3, 3])
+        np.testing.assert_array_equal(sc1.factor.value, [3, 3])
 
 
 class TestMultipleParameterSets:
@@ -346,7 +339,7 @@ class TestMultipleParameterSets:
         Test that a change to one parameter as a set propagates to param_sets.
         """
         self.gmodel.amplitude = [1, 10]
-        utils.assert_almost_equal(
+        np.testing.assert_almost_equal(
             self.gmodel.param_sets,
             np.array([[1.,
                        10],
@@ -362,7 +355,7 @@ class TestMultipleParameterSets:
         param_sets.
         """
         self.gmodel.amplitude[0] = 11
-        utils.assert_almost_equal(
+        np.testing.assert_almost_equal(
             self.gmodel.param_sets,
             np.array([[11.,
                        10],
@@ -374,8 +367,8 @@ class TestMultipleParameterSets:
 
     def test_change_parameters(self):
         self.gmodel.parameters = [13, 10, 9, 5.2, 0.4, 0.7]
-        utils.assert_almost_equal(self.gmodel.amplitude.value, [13., 10.])
-        utils.assert_almost_equal(self.gmodel.mean.value, [9., 5.2])
+        np.testing.assert_almost_equal(self.gmodel.amplitude.value, [13., 10.])
+        np.testing.assert_almost_equal(self.gmodel.mean.value, [9., 5.2])
 
 
 class TestParameterInitialization:
@@ -503,7 +496,7 @@ class TestParameterInitialization:
         assert np.all(t.param_sets[1] == [[1, 2], [3, 4]])
         assert np.all(t.parameters == [10, 20, 1, 2, 3, 4])
         assert t.coeff.shape == (2,)
-        assert t.e.shape == (2,2)
+        assert t.e.shape == (2, 2)
 
     def test_two_model_1d_array_parameters(self):
         t = TParModel([[10, 20], [30, 40]], [[1, 2], [3, 4]], n_models=2)
@@ -548,7 +541,7 @@ class TestParameterInitialization:
 
     def test_two_model_2d_array_parameters(self):
         t = TParModel([[[10, 20], [30, 40]], [[50, 60], [70, 80]]],
-                         [[[1, 2], [3, 4]], [[5, 6], [7, 8]]], n_models=2)
+                      [[[1, 2], [3, 4]], [[5, 6], [7, 8]]], n_models=2)
         assert len(t) == 2
         assert t.model_set_axis == 0
         assert np.all(t.param_sets == [[[[10, 20], [30, 40]],
@@ -628,6 +621,7 @@ def test_non_broadcasting_parameters():
     c = np.array([[1, 2, 3, 4], [1, 2, 3, 4]])
 
     class TestModel(Model):
+
         p1 = Parameter()
         p2 = Parameter()
         p3 = Parameter()
@@ -647,4 +641,6 @@ def test_setter():
     model = SetterModel(xc=-1, yc=3, p=np.pi)
 
     for x, y in pars:
-        utils.assert_almost_equal(model(x, y), (x + 1)**2 + (y - np.pi * 3)**2)
+        np.testing.assert_almost_equal(
+            model(x, y),
+            (x + 1)**2 + (y - np.pi * 3)**2)

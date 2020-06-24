@@ -1,14 +1,17 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
+import warnings
+
 import pytest
 import numpy as np
 from numpy.testing import assert_allclose
 
-from astropy.stats import (histogram, calculate_bin_edges,
-                scott_bin_width, freedman_bin_width, knuth_bin_width)
+from astropy.stats import (histogram, calculate_bin_edges, scott_bin_width,
+                           freedman_bin_width, knuth_bin_width)
+from astropy.utils.exceptions import AstropyUserWarning
 
 try:
-    import scipy  # pylint: disable=W0611
+    import scipy  # pylint: disable=W0611 # noqa
 except ImportError:
     HAS_SCIPY = False
 else:
@@ -47,7 +50,8 @@ def test_freedman_bin_width(N=10000, rseed=0):
     # data with too small IQR
     test_x = [1, 2, 3] + [4] * 100 + [5, 6, 7]
     with pytest.raises(ValueError) as e:
-        freedman_bin_width(test_x, return_bins=True)
+        with pytest.warns(RuntimeWarning, match=r'divide by zero encountered'):
+            freedman_bin_width(test_x, return_bins=True)
         assert 'Please use another bin method' in str(e.value)
 
     # data with small IQR but not too small
@@ -92,7 +96,6 @@ if HAS_SCIPY:
 def test_histogram(bin_type, N=1000, rseed=0):
     rng = np.random.RandomState(rseed)
     x = rng.randn(N)
-
     counts, bins = histogram(x, bin_type)
     assert (counts.sum() == len(x))
     assert (len(counts) == len(bins) - 1)

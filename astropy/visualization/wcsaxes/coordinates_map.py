@@ -4,7 +4,7 @@ from textwrap import indent
 from collections import OrderedDict
 
 from .coordinate_helpers import CoordinateHelper
-from .frame import RectangularFrame
+from .frame import RectangularFrame, RectangularFrame1D
 from .coordinate_range import find_coordinate_range
 
 
@@ -65,21 +65,22 @@ class CoordinatesMap:
             coord_unit = coord_meta['unit'][index]
             name = coord_meta['name'][index]
 
+            visible = True
             if 'visible' in coord_meta:
                 visible = coord_meta['visible'][index]
-            else:
-                visible = True
 
+            format_unit = None
             if 'format_unit' in coord_meta:
                 format_unit = coord_meta['format_unit'][index]
-            else:
-                format_unit = None
 
+            default_label = name[0] if isinstance(name, (tuple, list)) else name
+            if 'default_axis_label' in coord_meta:
+                default_label = coord_meta['default_axis_label'][index]
+
+            coord_index = None
             if visible:
                 visible_count += 1
                 coord_index = visible_count - 1
-            else:
-                coord_index = None
 
             self._coords.append(CoordinateHelper(parent_axes=axes,
                                                  parent_map=self,
@@ -89,7 +90,8 @@ class CoordinatesMap:
                                                  coord_wrap=coord_wrap,
                                                  coord_unit=coord_unit,
                                                  format_unit=format_unit,
-                                                 frame=self.frame))
+                                                 frame=self.frame,
+                                                 default_label=default_label))
 
             # Set up aliases for coordinates
             if isinstance(name, tuple):
@@ -143,11 +145,18 @@ class CoordinatesMap:
 
     def get_coord_range(self):
         xmin, xmax = self._axes.get_xlim()
-        ymin, ymax = self._axes.get_ylim()
+
+        if isinstance(self.frame, RectangularFrame1D):
+            extent = [xmin, xmax]
+        else:
+            ymin, ymax = self._axes.get_ylim()
+            extent = [xmin, xmax, ymin, ymax]
+
         return find_coordinate_range(self._transform,
-                                     [xmin, xmax, ymin, ymax],
+                                     extent,
                                      [coord.coord_type for coord in self if coord.coord_index is not None],
-                                     [coord.coord_unit for coord in self if coord.coord_index is not None])
+                                     [coord.coord_unit for coord in self if coord.coord_index is not None],
+                                     [coord.coord_wrap for coord in self if coord.coord_index is not None])
 
     def _as_table(self):
 
@@ -160,7 +169,7 @@ class CoordinatesMap:
             aliases = [key for key, value in self._aliases.items() if value == icoord]
             row = OrderedDict([('index', icoord), ('aliases', ' '.join(aliases)),
                                ('type', coord.coord_type), ('unit', coord.coord_unit),
-                               ('wrap', coord.coord_wrap), ('format_unit', coord.format_unit),
+                               ('wrap', coord.coord_wrap), ('format_unit', coord.get_format_unit()),
                                ('visible', 'no' if coord.coord_index is None else 'yes')])
             rows.append(row)
         return Table(rows=rows)

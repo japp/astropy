@@ -30,7 +30,6 @@ import numpy as np
 from astropy import units as u
 from astropy.utils.exceptions import AstropyWarning
 
-from .representation import REPRESENTATION_CLASSES
 from .matrix_utilities import matrix_product
 
 __all__ = ['TransformGraph', 'CoordinateTransform', 'FunctionTransform',
@@ -90,7 +89,10 @@ class TransformGraph:
             for c in self.frame_set:
                 nm = getattr(c, 'name', None)
                 if nm is not None:
-                    dct[nm] = c
+                    if not isinstance(nm, list):
+                        nm = [nm]
+                    for name in nm:
+                        dct[name] = c
 
         return self._cached_names_dct
 
@@ -231,9 +233,14 @@ class TransformGraph:
             for a in self._graph:
                 agraph = self._graph[a]
                 for b in agraph:
-                    if b is transform:
+                    if agraph[b] is transform:
                         del agraph[b]
+                        fromsys = a
                         break
+
+                # If the transform was found, need to break out of the outer for loop too
+                if fromsys:
+                    break
             else:
                 raise ValueError('Could not find transform {} in the '
                                  'graph'.format(transform))
@@ -248,6 +255,11 @@ class TransformGraph:
                 else:
                     raise ValueError('Current transform from {} to {} is not '
                                      '{}'.format(fromsys, tosys, transform))
+
+        # Remove the subgraph if it is now empty
+        if self._graph[fromsys] == {}:
+            self._graph.pop(fromsys)
+
         self.invalidate_cache()
 
     def find_shortest_path(self, fromsys, tosys):
@@ -500,10 +512,12 @@ class TransformGraph:
             if node not in nodes:
                 nodes.append(node)
         nodenames = []
-        invclsaliases = dict([(v, k) for k, v in self._cached_names.items()])
+        invclsaliases = dict([(f, [k for k, v in self._cached_names.items() if v == f])
+                              for f in self.frame_set])
         for n in nodes:
             if n in invclsaliases:
-                nodenames.append('{0} [shape=oval label="{0}\\n`{1}`"]'.format(n.__name__, invclsaliases[n]))
+                aliases = '`\\n`'.join(invclsaliases[n])
+                nodenames.append('{0} [shape=oval label="{0}\\n`{1}`"]'.format(n.__name__, aliases))
             else:
                 nodenames.append(n.__name__ + '[ shape=oval ]')
 
@@ -564,12 +578,12 @@ class TransformGraph:
         Converts this transform graph into a networkx graph.
 
         .. note::
-            You must have the `networkx <http://networkx.lanl.gov/>`_
+            You must have the `networkx <https://networkx.github.io/>`_
             package installed for this to work.
 
         Returns
         -------
-        nxgraph : `networkx.Graph <http://networkx.lanl.gov/reference/classes.graph.html>`_
+        nxgraph : `networkx.Graph <https://networkx.github.io/documentation/stable/reference/classes/graph.html>`_
             This `TransformGraph` as a `networkx.Graph`_.
         """
         import networkx as nx
@@ -804,8 +818,8 @@ class FunctionTransform(CoordinateTransform):
         with suppress(TypeError):
             sig = signature(func)
             kinds = [x.kind for x in sig.parameters.values()]
-            if (len(x for x in kinds if x == sig.POSITIONAL_ONLY) != 2
-                and sig.VAR_POSITIONAL not in kinds):
+            if (len(x for x in kinds if x == sig.POSITIONAL_ONLY) != 2 and
+                    sig.VAR_POSITIONAL not in kinds):
                 raise ValueError('provided function does not accept two arguments')
 
         self.func = func
@@ -816,8 +830,8 @@ class FunctionTransform(CoordinateTransform):
     def __call__(self, fromcoord, toframe):
         res = self.func(fromcoord, toframe)
         if not isinstance(res, self.tosys):
-            raise TypeError('the transformation function yielded {} but '
-                'should have been of type {}'.format(res, self.tosys))
+            raise TypeError(f'the transformation function yielded {res} but '
+                            f'should have been of type {self.tosys}')
         if fromcoord.data.differentials and not res.data.differentials:
             warn("Applied a FunctionTransform to a coordinate frame with "
                  "differentials, but the FunctionTransform does not handle "
@@ -1210,7 +1224,7 @@ class StaticMatrixTransform(BaseAffineTransform):
 
     Parameters
     ----------
-    matrix : array-like or callable
+    matrix : array_like or callable
         A 3 x 3 matrix for transforming 3-vectors. In most cases will
         be unitary (although this is not strictly required). If a callable,
         will be called *with no arguments* to get the matrix.

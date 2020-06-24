@@ -35,9 +35,8 @@ function.
 References
 ----------
 .. [1] http://adsabs.harvard.edu/abs/2012arXiv1207.5578S
-.. [2] http://astroML.org/ https://github.com//astroML/astroML/
+.. [2] http://astroml.org/ https://github.com//astroML/astroML/
 """
-
 import warnings
 
 import numpy as np
@@ -62,9 +61,9 @@ def bayesian_blocks(t, x=None, sigma=None,
     ----------
     t : array_like
         data times (one dimensional, length N)
-    x : array_like (optional)
+    x : array_like, optional
         data values
-    sigma : array_like or float (optional)
+    sigma : array_like or float, optional
         data errors
     fitness : str or object
         the fitness function to use for the model.
@@ -103,6 +102,11 @@ def bayesian_blocks(t, x=None, sigma=None,
 
     Examples
     --------
+
+    .. testsetup::
+
+        >>> np.random.seed(12345)
+
     Event data:
 
     >>> t = np.random.normal(size=100)
@@ -202,9 +206,9 @@ class FitnessFunc:
         ----------
         t : array_like
             times of observations
-        x : array_like (optional)
+        x : array_like, optional
             values observed at each time
-        sigma : float or array_like (optional)
+        sigma : float or array_like, optional
             errors in values x
 
         Returns
@@ -214,10 +218,6 @@ class FitnessFunc:
         """
         # validate array input
         t = np.asarray(t, dtype=float)
-        if x is not None:
-            x = np.asarray(x)
-        if sigma is not None:
-            sigma = np.asarray(sigma)
 
         # find unique values of t
         t = np.array(t)
@@ -243,7 +243,8 @@ class FitnessFunc:
         # if x is specified, then we need to simultaneously sort t and x
         else:
             # TODO: allow broadcasted x?
-            x = np.asarray(x)
+            x = np.asarray(x, dtype=float)
+
             if x.shape not in [(), (1,), (t.size,)]:
                 raise ValueError("x does not match shape of t")
             x += np.zeros_like(t)
@@ -258,7 +259,7 @@ class FitnessFunc:
         if sigma is None:
             sigma = 1
         else:
-            sigma = np.asarray(sigma)
+            sigma = np.asarray(sigma, dtype=float)
             if sigma.shape not in [(), (1,), (t.size,)]:
                 raise ValueError('sigma does not match the shape of x')
 
@@ -305,9 +306,9 @@ class FitnessFunc:
         ----------
         t : array_like
             data times (one dimensional, length N)
-        x : array_like (optional)
+        x : array_like, optional
             data values
-        sigma : array_like or float (optional)
+        sigma : array_like or float, optional
             data errors
 
         Returns
@@ -385,12 +386,14 @@ class FitnessFunc:
         change_points = np.zeros(N, dtype=int)
         i_cp = N
         ind = N
-        while True:
+        while i_cp > 0:
             i_cp -= 1
             change_points[i_cp] = ind
             if ind == 0:
                 break
             ind = last[ind - 1]
+        if i_cp == 0:
+            change_points[i_cp] = 0
         change_points = change_points[i_cp:]
 
         return edges[change_points]
@@ -401,7 +404,7 @@ class Events(FitnessFunc):
 
     Parameters
     ----------
-    p0 : float (optional)
+    p0 : float, optional
         False alarm probability, used to compute the prior on
         :math:`N_{\rm blocks}` (see eq. 21 of Scargle 2012). For the Events
         type data, ``p0`` does not seem to be an accurate representation of the
@@ -410,24 +413,16 @@ class Events(FitnessFunc):
         statistical trials on signal-free noise to determine an appropriate
         value of ``gamma`` or ``ncp_prior`` to use for a desired false alarm
         rate.
-    gamma : float (optional)
+    gamma : float, optional
         If specified, then use this gamma to compute the general prior form,
         :math:`p \sim {\tt gamma}^{N_{\rm blocks}}`.  If gamma is specified, p0
         is ignored.
-    ncp_prior : float (optional)
+    ncp_prior : float, optional
         If specified, use the value of ``ncp_prior`` to compute the prior as
         above, using the definition :math:`{\tt ncp\_prior} = -\ln({\tt
         gamma})`.
         If ``ncp_prior`` is specified, ``gamma`` and ``p0`` is ignored.
     """
-    def __init__(self, p0=0.05, gamma=None, ncp_prior=None):
-        if p0 is not None and gamma is None and ncp_prior is None:
-            warnings.warn('p0 does not seem to accurately represent the false '
-                          'positive rate for event data. It is highly '
-                          'recommended that you run random trials on signal-'
-                          'free noise to calibrate ncp_prior to achieve a '
-                          'desired false positive rate.', AstropyUserWarning)
-        super().__init__(p0, gamma, ncp_prior)
 
     def fitness(self, N_k, T_k):
         # eq. 19 from Scargle 2012
@@ -451,11 +446,11 @@ class RegularEvents(FitnessFunc):
     ----------
     dt : float
         tick rate for data
-    p0 : float (optional)
+    p0 : float, optional
         False alarm probability, used to compute the prior on :math:`N_{\rm
         blocks}` (see eq. 21 of Scargle 2012). If gamma is specified, p0 is
         ignored.
-    ncp_prior : float (optional)
+    ncp_prior : float, optional
         If specified, use the value of ``ncp_prior`` to compute the prior as
         above, using the definition :math:`{\tt ncp\_prior} = -\ln({\tt
         gamma})`.  If ``ncp_prior`` is specified, ``gamma`` and ``p0`` are
@@ -493,11 +488,11 @@ class PointMeasures(FitnessFunc):
 
     Parameters
     ----------
-    p0 : float (optional)
+    p0 : float, optional
         False alarm probability, used to compute the prior on :math:`N_{\rm
         blocks}` (see eq. 21 of Scargle 2012). If gamma is specified, p0 is
         ignored.
-    ncp_prior : float (optional)
+    ncp_prior : float, optional
         If specified, use the value of ``ncp_prior`` to compute the prior as
         above, using the definition :math:`{\tt ncp\_prior} = -\ln({\tt
         gamma})`.  If ``ncp_prior`` is specified, ``gamma`` and ``p0`` are

@@ -14,6 +14,7 @@
 #include "numpy/arrayobject.h"
 #include "numpy/ufuncobject.h"
 #include "erfa.h"
+#include "erfaextra.h"
 #include "erfa_additions.h"
 
 #define MODULE_DOCSTRING \
@@ -23,6 +24,28 @@
     "Python wrappers are also provided, which convert between\n" \
     "trailing dimensions and structured dtypes where necessary,\n" \
     "and combine status codes."
+#define GET_LEAP_SECONDS_DOCSTRING \
+    "get_leap_seconds()\n\n" \
+    "Access the leap second table used in ERFA.\n\n" \
+    "Returns\n" \
+    "-------\n" \
+    "leap_seconds : `~numpy.ndarray`\n" \
+    "    With structured dtype `~astropy._erfa.dt_eraLEAPSECOND`,\n" \
+    "    containing items 'year', 'month', and 'tai_utc'."
+#define SET_LEAP_SECONDS_DOCSTRING \
+    "set_leap_seconds([table])\n\n" \
+    "Set the leap second table used in ERFA.\n\n" \
+    "Parameters\n" \
+    "----------\n" \
+    "leap_seconds : array_like, optional\n" \
+    "    With structured dtype `~astropy._erfa.dt_eraLEAPSECOND`,\n" \
+    "    containing items 'year', 'month', and 'tai_utc'.\n" \
+    "    If not given, reset to the ERFA built-in table.\n\n" \
+    "Notes\n" \
+    "-----\n" \
+    "No sanity checks are done on the input; it is simply coerced\n" \
+    "to the correct dtype."
+
 
 static inline void copy_to_double3(char *ptr, npy_intp s, double d[3]) {
     char *p = ptr;
@@ -581,59 +604,100 @@ fail:
     return -1;
 }
 
-{%- if NUMPY_LT_1_16 %}
 /*
- * The following is only necessary for NUMPY_LT_1_16.  Once we support
- * only numpy >=1.16, it can be removed here and in the template part.
+ * LEAP SECOND ACCESS
  *
- * For numpy <1.16, this works around the fact that gufuncs could not
- * have fixed dimensions.
+ * Getting/Setting ERFAs built-in TAI-UTC table.
  *
- * Rather than just go for our type resolver, we check here whether
- * any non-void input with core dimensions has dimension equal to 3.  Here,
- * we already know that all core dimensions are equal, so we have to check
- * only one.
+ * TODO: the whole procedure is not sub-interpreter safe.
+ * In this module, one might get dt_eraLEAPSECOND out of the module dict,
+ * and store the leap_second array in a per-module struct (see PEP 3121).
+ * But one then would also have to adapt erfa/dat.c to not use a
+ * static leap second table.  Possibly best might be to copy dat.c here
+ * and put the table into the per-module struct as well.
  */
-static int ErfaUFuncD3CheckTypeResolver(PyUFuncObject *ufunc,
-                                        NPY_CASTING casting,
-                                        PyArrayObject **operands,
-                                        PyObject *type_tup,
-                                        PyArray_Descr **out_dtypes)
-{
-    int i;
+static PyArray_Descr *dt_eraLEAPSECOND = NULL;  /* Set in PyInit_ufunc */
 
-    for (i = 0; i < ufunc->nin; i++) {
-        if (ufunc->core_num_dims[i]) {
-            PyArrayObject *op = operands[i];
-            if (PyArray_DESCR(op)->type_num != NPY_VOID) {
-                /* last dimension is should always be 3 */
-                int last_dim = PyArray_DIMS(op)[PyArray_NDIM(op)-1];
-                if (last_dim != 3) {
-                    PyErr_Format(PyExc_ValueError,
-                        "%s: Input operand %d has a mismatch in its "
-                        "core dimension %d, with gufunc signature %s "
-                        "(size %zd is different from fixed size 3)",
-                        ufunc->name, i, ufunc->core_num_dims[i] - 1,
-                        ufunc->core_signature, last_dim);
-                    return -1;
-                }
-                break;
-            }
-        }
-    }
-    if (i == ufunc->nin) {
+static PyObject *
+get_leap_seconds(PyObject *NPY_UNUSED(module), PyObject *NPY_UNUSED(args)) {
+    eraLEAPSECOND *leapseconds;
+    npy_intp count;
+    PyArrayObject *array;
+    /* Get the leap seconds from ERFA */
+    count = (npy_intp)eraGetLeapSeconds(&leapseconds);
+    if (count < 0) {
         PyErr_SetString(PyExc_RuntimeError,
-                        "no relevant input found; should not happen!");
+                        "Unpexected failure to get ERFA leap seconds.");
+        return NULL;
     }
-    return ErfaUFuncTypeResolver(ufunc, casting, operands, type_tup,
-                                 out_dtypes);
+    /* Allocate an array to hold them */
+    Py_INCREF(dt_eraLEAPSECOND);
+    array = (PyArrayObject *)PyArray_NewFromDescr(
+        &PyArray_Type, dt_eraLEAPSECOND, 1, &count, NULL, NULL, 0, NULL);
+    if (array == NULL) {
+        return NULL;
+    }
+    /* Copy the leap seconds over into the array */
+    memcpy(PyArray_DATA(array), leapseconds, count*sizeof(eraLEAPSECOND));
+    return (PyObject *)array;
 }
-{%- endif %}
+
+static PyObject *
+set_leap_seconds(PyObject *NPY_UNUSED(module), PyObject *args) {
+    PyObject *leap_seconds = NULL;
+    PyArrayObject *array;
+    static PyArrayObject *leap_second_array = NULL;
+
+    if (!PyArg_ParseTuple(args, "|O:set_leap_seconds", &leap_seconds)) {
+        return NULL;
+    }
+    if (leap_seconds != NULL && leap_seconds != Py_None) {
+        /*
+         * Convert the input to an array with the proper dtype;
+         * Ensure a copy is made so one cannot change the data by changing
+         * the input array.
+         */
+        Py_INCREF(dt_eraLEAPSECOND);
+        array = (PyArrayObject *)PyArray_FromAny(leap_seconds, dt_eraLEAPSECOND,
+                    1, 1, (NPY_ARRAY_CARRAY | NPY_ARRAY_ENSURECOPY), NULL);
+        if (array == NULL) {
+            return NULL;
+        }
+        if (PyArray_SIZE(array) == 0) {
+            PyErr_SetString(PyExc_ValueError,
+                            "Leap second array must have at least one entry.");
+        }
+        /*
+         * Use the array for the new leap seconds.
+         */
+        eraSetLeapSeconds(PyArray_DATA(array), PyArray_SIZE(array));
+    }
+    else {
+        /*
+         * If no input is given, reset leap second table.
+         */
+        array = NULL;
+        eraSetLeapSeconds(NULL, 0);
+    }
+    /*
+     * If we allocated a leap second array before, deallocate it,
+     * and set it to remember any allocation from PyArray_FromAny.
+     */
+    if (leap_second_array != NULL) {
+        Py_DECREF(leap_second_array);
+    }
+    leap_second_array = array;
+    Py_RETURN_NONE;
+}
 
 /*
  * UFUNC MODULE DEFINITIONS AND INITIALIZATION
  */
 static PyMethodDef ErfaUFuncMethods[] = {
+    {"get_leap_seconds", (PyCFunction)get_leap_seconds,
+         METH_NOARGS, GET_LEAP_SECONDS_DOCSTRING},
+    {"set_leap_seconds", (PyCFunction)set_leap_seconds,
+         METH_VARARGS, SET_LEAP_SECONDS_DOCSTRING},
     {NULL, NULL, 0, NULL}
 };
 
@@ -757,11 +821,18 @@ PyMODINIT_FUNC PyInit_ufunc(void)
         );
     PyArray_DescrAlignConverter(dtype_def, &dt_eraASTROM);
     Py_DECREF(dtype_def);
+    /* eraLEAPSECOND */
+    dtype_def = Py_BuildValue("[(s, s), (s, s), (s, s)]",
+                              "year", "i4", "month", "i4", "tai_utc", "f8");
+    PyArray_DescrAlignConverter(dtype_def, &dt_eraLEAPSECOND);
+    Py_DECREF(dtype_def);
+
     if (dt_double == NULL || dt_int == NULL ||
         dt_pv == NULL || dt_pvdpv == NULL ||
         dt_ymdf == NULL || dt_hmsf == NULL || dt_dmsf == NULL ||
         dt_sign == NULL || dt_type == NULL ||
-        dt_eraLDBODY == NULL || dt_eraASTROM == NULL) {
+        dt_eraLDBODY == NULL || dt_eraASTROM == NULL ||
+        dt_eraLEAPSECOND == NULL) {
         goto fail;
     }
     /* Make the structured dtypes available in the module */
@@ -774,6 +845,7 @@ PyMODINIT_FUNC PyInit_ufunc(void)
     PyDict_SetItemString(d, "dt_type", (PyObject *)dt_type);
     PyDict_SetItemString(d, "dt_eraLDBODY", (PyObject *)dt_eraLDBODY);
     PyDict_SetItemString(d, "dt_eraASTROM", (PyObject *)dt_eraASTROM);
+    PyDict_SetItemString(d, "dt_eraLEAPSECOND", (PyObject *)dt_eraLEAPSECOND);
     /*
      * Define the ufuncs.  For those without structured dtypes,
      * the ufunc creation uses the static variables defined above;
@@ -821,11 +893,7 @@ PyMODINIT_FUNC PyInit_ufunc(void)
         goto fail;
     }
     {%- endif %}
-    {%- if func.signature and 'd3' in func.signature and not func.d3_fix_arg %}
-    ufunc->type_resolver = &ErfaUFuncD3CheckTypeResolver;
-    {%- else %}
     ufunc->type_resolver = &ErfaUFuncTypeResolver;
-    {%- endif %}
     PyDict_SetItemString(d, "{{ func.pyname }}", (PyObject *)ufunc);
     Py_DECREF(ufunc);
     {%- endfor %}
@@ -848,5 +916,6 @@ decref:
     Py_XDECREF(dt_type);
     Py_XDECREF(dt_eraASTROM);
     Py_XDECREF(dt_eraLDBODY);
+    Py_XDECREF(dt_eraLEAPSECOND);
     return m;
 }

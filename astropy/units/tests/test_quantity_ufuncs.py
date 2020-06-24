@@ -1,6 +1,7 @@
 # The purpose of these tests are to ensure that calling ufuncs with quantities
 # returns quantities with the right units, or raises exceptions.
 
+import sys
 import warnings
 from collections import namedtuple
 
@@ -12,9 +13,10 @@ from astropy import units as u
 from astropy.units import quantity_helper as qh
 from astropy._erfa import ufunc as erfa_ufunc
 from astropy.tests.helper import raises, catch_warnings
+from astropy.utils.compat.context import nullcontext
 
 try:
-    import scipy  # pylint: disable=W0611
+    import scipy  # pylint: disable=W0611 # noqa
 except ImportError:
     HAS_SCIPY = False
 else:
@@ -435,8 +437,6 @@ class TestQuantityMathFuncs:
         assert np.all(np.power(np.arange(4.) * u.m, 0.) ==
                       1. * u.dimensionless_unscaled)
 
-    # float_power only introduced in numpy 1.12
-    @pytest.mark.skipif("not hasattr(np, 'float_power')")
     def test_float_power_array(self):
         assert np.all(np.float_power(np.array([1., 2., 3.]) * u.m, 3.)
                       == np.array([1., 8., 27.]) * u.m ** 3)
@@ -702,6 +702,26 @@ class TestComparisonUfuncs:
             ufunc(q_i1, q_i2)
         assert "compatible dimensions" in exc.value.args[0]
 
+    @pytest.mark.parametrize('ufunc', (np.isfinite, np.isinf, np.isnan,
+                                       np.signbit))
+    def test_onearg_test_ufuncs(self, ufunc):
+        q = [1., np.inf, -np.inf, np.nan, -1., 0.] * u.m
+        out = ufunc(q)
+        assert not isinstance(out, u.Quantity)
+        assert out.dtype == bool
+        assert np.all(out == ufunc(q.value))
+
+    # Ignore RuntimeWarning raised on Windows and s390.
+    @pytest.mark.filterwarnings('ignore:.*invalid value encountered in sign')
+    def test_sign(self):
+        q = [1., np.inf, -np.inf, np.nan, -1., 0.] * u.m
+
+        out = np.sign(q)
+        assert not isinstance(out, u.Quantity)
+        assert out.dtype == q.dtype
+        assert np.all((out == np.sign(q.value)) |
+                      (np.isnan(out) & np.isnan(q.value)))
+
 
 class TestInplaceUfuncs:
 
@@ -763,8 +783,7 @@ class TestInplaceUfuncs:
         np.modf(v3, v3, tmp)
         assert check3 is v3
         assert check3.unit == u.dimensionless_unscaled
-        # And now, with numpy >= 1.13, one can also replace input with
-        # first output when scaling
+        # can also replace input with first output when scaling
         v4 = v_copy.copy()
         check4 = v4
         np.modf(v4, v4, tmp)
@@ -867,6 +886,49 @@ class TestInplaceUfuncs:
         a4 = u.Quantity([1, 2, 3, 4], u.m, dtype=np.int32)
         with pytest.raises(TypeError):
             a4 += u.Quantity(10, u.mm, dtype=np.int64)
+
+    @pytest.mark.parametrize('ufunc', (np.equal, np.greater))
+    def test_comparison_ufuncs_inplace(self, ufunc):
+        q_i1 = np.array([-3.3, 2.1, 10.2]) * u.kg / u.s
+        q_i2 = np.array([10., -5., 1.e6]) * u.g / u.Ms
+        check = np.empty(q_i1.shape, bool)
+        ufunc(q_i1.value, q_i2.to_value(q_i1.unit), out=check)
+
+        result = np.empty(q_i1.shape, bool)
+        q_o = ufunc(q_i1, q_i2, out=result)
+        assert q_o is result
+        assert type(q_o) is np.ndarray
+        assert q_o.dtype == bool
+        assert np.all(q_o == check)
+
+    @pytest.mark.parametrize('ufunc', (np.isfinite, np.signbit))
+    def test_onearg_test_ufuncs_inplace(self, ufunc):
+        q = [1., np.inf, -np.inf, np.nan, -1., 0.] * u.m
+        check = np.empty(q.shape, bool)
+        ufunc(q.value, out=check)
+
+        result = np.empty(q.shape, bool)
+        out = ufunc(q, out=result)
+        assert out is result
+        assert type(out) is np.ndarray
+        assert out.dtype == bool
+        assert np.all(out == ufunc(q.value))
+
+    # Ignore RuntimeWarning raised on Windows and s390.
+    @pytest.mark.filterwarnings('ignore:.*invalid value encountered in sign')
+    def test_sign_inplace(self):
+        q = [1., np.inf, -np.inf, np.nan, -1., 0.] * u.m
+        check = np.empty(q.shape, q.dtype)
+
+        np.sign(q.value, out=check)
+
+        result = np.empty(q.shape, q.dtype)
+        out = np.sign(q, out=result)
+        assert out is result
+        assert type(out) is np.ndarray
+        assert out.dtype == q.dtype
+        assert np.all((out == np.sign(q.value)) |
+                      (np.isnan(out) & np.isnan(q.value)))
 
 
 @pytest.mark.skipif(not hasattr(np.core.umath, 'clip'),

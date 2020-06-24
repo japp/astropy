@@ -22,6 +22,10 @@ Examples
 1D Kernels
 ----------
 
+..
+  EXAMPLE START
+  Using 1D Kernels to Smooth Noisy Data
+
 One application of filtering is to smooth noisy data. In this case we
 consider a noisy Lorentz curve:
 
@@ -85,8 +89,15 @@ but will not work properly if NaN values are present in the data.
 
 >>> smoothed = np.convolve(data_1D, box_kernel.array)
 
+..
+  EXAMPLE END
+
 2D Kernels
 ----------
+
+..
+  EXAMPLE START
+  Using 2D Kernels to Smooth Noisy Data
 
 As all 2D kernels are symmetric, it is sufficient to specify the width in one
 direction. Therefore the use of 2D kernels is basically the same as for 1D
@@ -156,13 +167,13 @@ scale compared to the original image.
     data_2D = gauss(x, y) + 0.1 * (np.random.rand(201, 201) - 0.5)
 
     # Setup kernels, including unity kernel for original image
-    # Choose normalization for linear scale space for MexicanHat
+    # Choose normalization for linear scale space for RickerWavelet
 
     kernels = [TrapezoidDisk2DKernel(11, slope=0.2),
                Tophat2DKernel(11),
                Gaussian2DKernel(11),
                Box2DKernel(11),
-               11 ** 2 * MexicanHat2DKernel(11),
+               11 ** 2 * RickerWavelet2DKernel(11),
                AiryDisk2DKernel(11)]
 
     fig, axes = plt.subplots(nrows=2, ncols=3)
@@ -185,10 +196,12 @@ scale compared to the original image.
 
 The Gaussian kernel has better smoothing properties compared to the Box and the
 Top Hat. The Box filter is not isotropic and can produce artifacts (the source
-appears rectangular). The Mexican Hat filter removes noise and slowly varying
+appears rectangular). The Ricker Wavelet filter removes noise and slowly varying
 structures (i.e., background), but produces a negative ring around the source.
 The best choice for the filter strongly depends on the application.
 
+..
+  EXAMPLE END
 
 Available Kernels
 =================
@@ -203,8 +216,8 @@ Available Kernels
    CustomKernel
    Gaussian1DKernel
    Gaussian2DKernel
-   MexicanHat1DKernel
-   MexicanHat2DKernel
+   RickerWavelet1DKernel
+   RickerWavelet2DKernel
    Model1DKernel
    Model2DKernel
    Ring2DKernel
@@ -219,8 +232,17 @@ Addition and Subtraction
 ------------------------
 
 As convolution is a linear operation, kernels can be added or subtracted from
-each other. They can also be multiplied with some number. One basic example
-would be the definition of a Difference of Gaussian filter:
+each other. They can also be multiplied with some number.
+
+Examples
+^^^^^^^^
+
+..
+  EXAMPLE START
+  Adding and Subtracting Kernels in astropy.convolution
+
+One basic example of subtracting kernels would be the definition of a
+Difference of Gaussian filter:
 
 >>> from astropy.convolution import Gaussian1DKernel
 >>> gauss_1 = Gaussian1DKernel(10)
@@ -240,21 +262,29 @@ explicitly:
 
 >>> SoG.normalize()
 
+..
+  EXAMPLE END
 
 Convolution
 -----------
 
 Furthermore, two kernels can be convolved with each other, which is useful when
 data is filtered with two different kinds of kernels or to create a new,
-special kernel:
+special kernel.
 
->>> import warnings
+Examples
+^^^^^^^^
+
+..
+  EXAMPLE START
+  Convolving Kernels in astropy.convolution
+
+To convolve two kernels with each other:
+
 >>> from astropy.convolution import Gaussian1DKernel, convolve
 >>> gauss_1 = Gaussian1DKernel(10)
 >>> gauss_2 = Gaussian1DKernel(16)
->>> with warnings.catch_warnings():
-...     warnings.simplefilter('ignore')  # Ignore warning for doctest
-...     broad_gaussian = convolve(gauss_2,  gauss_1)
+>>> broad_gaussian = convolve(gauss_2,  gauss_1)  # doctest: +IGNORE_WARNINGS
 
 Or in case of multistage smoothing:
 
@@ -274,12 +304,13 @@ You would rather do the following:
 
 >>> gauss = Gaussian1DKernel(3)
 >>> box = Box1DKernel(5)
->>> with warnings.catch_warnings():
-...     warnings.simplefilter('ignore')  # Ignore warning for doctest
-...     smoothed_gauss_box = convolve(data_1D, convolve(box, gauss))
+>>> smoothed_gauss_box = convolve(data_1D, convolve(box, gauss))  # doctest: +IGNORE_WARNINGS
 
 Which, in most cases, will also be faster than the first method because only
 one convolution with the often times larger data array will be necessary.
+
+..
+  EXAMPLE END
 
 Discretization
 ==============
@@ -342,7 +373,7 @@ The kernel arrays can be renormalized explicitly by calling either the
 method leaves the kernel itself unchanged but works with an internal normalized
 version of the kernel.
 
-Note that for :class:`~astropy.convolution.MexicanHat1DKernel`
-and :class:`~astropy.convolution.MexicanHat2DKernel` there is
+Note that for :class:`~astropy.convolution.RickerWavelet1DKernel`
+and :class:`~astropy.convolution.RickerWavelet2DKernel` there is
 :math:`\int_{-\infty}^{\infty} f(x) dx = 0`. To define a proper normalization,
 both filters are derived from a normalized Gaussian function.

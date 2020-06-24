@@ -10,8 +10,10 @@ import numpy as np
 from astropy import units as u
 from astropy.coordinates.baseframe import frame_transform_graph
 from astropy.coordinates.transformations import FunctionTransformWithFiniteDifference, AffineTransform
-from astropy.coordinates.representation import (SphericalRepresentation, CartesianRepresentation,
-                              UnitSphericalRepresentation, CartesianDifferential)
+from astropy.coordinates.representation import (SphericalRepresentation,
+                                                CartesianRepresentation,
+                                                UnitSphericalRepresentation,
+                                                CartesianDifferential)
 from astropy import _erfa as erfa
 
 from .icrs import ICRS
@@ -25,9 +27,10 @@ from .utils import get_jd12, aticq, atciqz, get_cip, prepare_earth_position_vel
 @frame_transform_graph.transform(FunctionTransformWithFiniteDifference, ICRS, CIRS)
 def icrs_to_cirs(icrs_coo, cirs_frame):
     # first set up the astrometry context for ICRS<->CIRS
-    jd1, jd2 = get_jd12(cirs_frame.obstime, 'tdb')
+    jd1, jd2 = get_jd12(cirs_frame.obstime, 'tt')
     x, y, s = get_cip(jd1, jd2)
     earth_pv, earth_heliocentric = prepare_earth_position_vel(cirs_frame.obstime)
+    # erfa.apci requests TDB but TT can be used instead of TDB without any significant impact on accuracy
     astrom = erfa.apci(jd1, jd2, earth_pv, earth_heliocentric, x, y, s)
 
     if icrs_coo.data.get_name() == 'unitspherical' or icrs_coo.data.to_cartesian().x.unit == u.one:
@@ -69,9 +72,10 @@ def cirs_to_icrs(cirs_coo, icrs_frame):
 
     # set up the astrometry context for ICRS<->cirs and then convert to
     # astrometric coordinate direction
-    jd1, jd2 = get_jd12(cirs_coo.obstime, 'tdb')
+    jd1, jd2 = get_jd12(cirs_coo.obstime, 'tt')
     x, y, s = get_cip(jd1, jd2)
     earth_pv, earth_heliocentric = prepare_earth_position_vel(cirs_coo.obstime)
+    # erfa.apci requests TDB but TT can be used instead of TDB without any significant impact on accuracy
     astrom = erfa.apci(jd1, jd2, earth_pv, earth_heliocentric, x, y, s)
     i_ra, i_dec = aticq(cirs_ra, cirs_dec, astrom)
 
@@ -209,8 +213,8 @@ def gcrs_to_icrs(gcrs_coo, icrs_frame):
 
 @frame_transform_graph.transform(FunctionTransformWithFiniteDifference, GCRS, GCRS)
 def gcrs_to_gcrs(from_coo, to_frame):
-    if (np.all(from_coo.obstime == to_frame.obstime)
-        and np.all(from_coo.obsgeoloc == to_frame.obsgeoloc)):
+    if (np.all(from_coo.obstime == to_frame.obstime) and
+            np.all(from_coo.obsgeoloc == to_frame.obsgeoloc)):
         return to_frame.realize_frame(from_coo.data)
     else:
         # like CIRS, we do this self-transform via ICRS

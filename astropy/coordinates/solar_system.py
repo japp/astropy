@@ -30,20 +30,20 @@ __all__ = ["get_body", "get_moon", "get_body_barycentric",
 DEFAULT_JPL_EPHEMERIS = 'de430'
 
 """List of kernel pairs needed to calculate positions of a given object."""
-BODY_NAME_TO_KERNEL_SPEC = OrderedDict(
-                                      (('sun', [(0, 10)]),
-                                       ('mercury', [(0, 1), (1, 199)]),
-                                       ('venus', [(0, 2), (2, 299)]),
-                                       ('earth-moon-barycenter', [(0, 3)]),
-                                       ('earth', [(0, 3), (3, 399)]),
-                                       ('moon', [(0, 3), (3, 301)]),
-                                       ('mars', [(0, 4)]),
-                                       ('jupiter', [(0, 5)]),
-                                       ('saturn', [(0, 6)]),
-                                       ('uranus', [(0, 7)]),
-                                       ('neptune', [(0, 8)]),
-                                       ('pluto', [(0, 9)]))
-                                      )
+BODY_NAME_TO_KERNEL_SPEC = OrderedDict([
+    ('sun', [(0, 10)]),
+    ('mercury', [(0, 1), (1, 199)]),
+    ('venus', [(0, 2), (2, 299)]),
+    ('earth-moon-barycenter', [(0, 3)]),
+    ('earth', [(0, 3), (3, 399)]),
+    ('moon', [(0, 3), (3, 301)]),
+    ('mars', [(0, 4)]),
+    ('jupiter', [(0, 5)]),
+    ('saturn', [(0, 6)]),
+    ('uranus', [(0, 7)]),
+    ('neptune', [(0, 8)]),
+    ('pluto', [(0, 9)])
+])
 
 """Indices to the plan94 routine for the given object."""
 PLAN94_BODY_NAME_TO_PLANET_INDEX = OrderedDict(
@@ -65,10 +65,11 @@ the default to be the JPL ephemeris::
     >>> solar_system_ephemeris.set('jpl')  # doctest: +SKIP
 
 Use of any JPL ephemeris requires the jplephem package
-(https://pypi.python.org/pypi/jplephem).
+(https://pypi.org/project/jplephem/).
 If needed, the ephemeris file will be downloaded (and cached).
 
 One can check which bodies are covered by a given ephemeris using::
+
     >>> solar_system_ephemeris.bodies
     ('earth', 'sun', 'moon', 'mercury', 'venus', 'earth-moon-barycenter', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune')
 """[1:-1]
@@ -98,9 +99,9 @@ class solar_system_ephemeris(ScienceState):
     ~10MB, and covers years 1950-2050 [2]_.  Older versions of the JPL
     ephemerides (such as the widely used de200) can be used via their URL [3]_.
 
-    .. [1] http://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/aareadme_de430-de431.txt
-    .. [2] http://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/aareadme_de432s.txt
-    .. [3] http://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/a_old_versions/
+    .. [1] https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/aareadme_de430-de431.txt
+    .. [2] https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/aareadme_de432s.txt
+    .. [3] https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/a_old_versions/
     """
     _value = 'builtin'
     _kernel = None
@@ -156,13 +157,13 @@ def _get_kernel(value):
     except ImportError:
         raise ImportError("Solar system JPL ephemeris calculations require "
                           "the jplephem package "
-                          "(https://pypi.python.org/pypi/jplephem)")
+                          "(https://pypi.org/project/jplephem/)")
 
     if value.lower() == 'jpl':
         value = DEFAULT_JPL_EPHEMERIS
 
     if value.lower() in ('de430', 'de432s'):
-        value = ('http://naif.jpl.nasa.gov/pub/naif/generic_kernels'
+        value = ('https://naif.jpl.nasa.gov/pub/naif/generic_kernels'
                  '/spk/planets/{:s}.bsp'.format(value.lower()))
 
     elif os.path.isfile(value):
@@ -272,7 +273,7 @@ def _get_body_barycentric_posvel(body, time, ephemeris=None,
         # Note that we use the new jd1.shape here to create a 1D result array.
         # It is reshaped below.
         body_posvel_bary = np.zeros((2 if get_velocity else 1, 3) +
-                                     getattr(jd1, 'shape', ()))
+                                    getattr(jd1, 'shape', ()))
         for pair in kernel_spec:
             spk = kernel[pair]
             if spk.data_type == 3:
@@ -373,7 +374,7 @@ def get_body_barycentric(body, time, ephemeris=None):
 get_body_barycentric.__doc__ += indent(_EPHEMERIS_NOTE)[4:]
 
 
-def _get_apparent_body_position(body, time, ephemeris):
+def _get_apparent_body_position(body, time, ephemeris, obsgeoloc=None):
     """Calculate the apparent position of body ``body`` relative to Earth.
 
     This corrects for the light-travel time to the object.
@@ -389,7 +390,8 @@ def _get_apparent_body_position(body, time, ephemeris):
     ephemeris : str, optional
         Ephemeris to use.  By default, use the one set with
         ``~astropy.coordinates.solar_system_ephemeris.set``
-
+    obsgeoloc : `~astropy.coordinates.CartesianRepresentation`, optional
+        The GCRS position of the observer
     Returns
     -------
     cartesian_position : `~astropy.coordinates.CartesianRepresentation`
@@ -408,6 +410,8 @@ def _get_apparent_body_position(body, time, ephemeris):
     emitted_time = time
     light_travel_time = 0. * u.s
     earth_loc = get_body_barycentric('earth', time, ephemeris)
+    if obsgeoloc is not None:
+        earth_loc += obsgeoloc
     while np.any(np.fabs(delta_light_travel_time) > 1.0e-8*u.s):
         body_loc = get_body_barycentric(body, emitted_time, ephemeris)
         earth_distance = (body_loc - earth_loc).norm()
@@ -455,15 +459,17 @@ def get_body(body, time, location=None, ephemeris=None):
     if location is None:
         location = time.location
 
-    cartrep = _get_apparent_body_position(body, time, ephemeris)
-    icrs = ICRS(cartrep)
     if location is not None:
         obsgeoloc, obsgeovel = location.get_gcrs_posvel(time)
-        gcrs = icrs.transform_to(GCRS(obstime=time,
-                                      obsgeoloc=obsgeoloc,
-                                      obsgeovel=obsgeovel))
     else:
-        gcrs = icrs.transform_to(GCRS(obstime=time))
+        obsgeoloc, obsgeovel = None, None
+
+    cartrep = _get_apparent_body_position(body, time, ephemeris, obsgeoloc)
+    icrs = ICRS(cartrep)
+    gcrs = icrs.transform_to(GCRS(obstime=time,
+                                  obsgeoloc=obsgeoloc,
+                                  obsgeovel=obsgeovel))
+
     return SkyCoord(gcrs)
 
 

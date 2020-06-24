@@ -66,9 +66,9 @@ unless you want to understand why some changes were necessary.
 
 - The use of 'imputed' units, i.e., supplying input/output units
   to a compound model without them but where the component models
-  support the _parameter_units_for_data_units() method is much more
+  support the ``_parameter_units_for_data_units()`` method is much more
   restricted in its applicability, which will only work when the
-  compound expression uses the '+' or '-' operators. Past behavior
+  compound expression uses the ``+`` or ``-`` operators. Past behavior
   led to sometimes arbitrary assignments of units, and sometimes
   incorrect units to the parameters.
 
@@ -100,13 +100,14 @@ unless you want to understand why some changes were necessary.
 - Many of the non-public methods have changed, particularly for
   compound models.
 
-- The `_CompoundModelMeta` metaclass no longer exists.
-
-** Technical Details **
+- The ``_CompoundModelMeta`` metaclass no longer exists.
 
 
-** Parameter-related changes **
+Technical Details
+=================
 
+Parameter-related changes
+-------------------------
 
 Previously Python descriptors were used to define parameters. The
 drawback of descriptors is that all instances of the models that
@@ -122,7 +123,7 @@ had to create their own array holding values for all the parameters
 of the compound model. As a result, the parameter values in a
 compound model were completely disassociated with those in
 the constituent model that made up the compound model. Changes
-to one were not reflected in the other, often leadin to confusion.
+to one were not reflected in the other, often leading to confusion.
 
 The new implementation still uses attributes defined at the
 class level for the parameters, but only
@@ -153,8 +154,8 @@ Since the parameter no longer is required to link to a specific
 model, it holds any dimension corresponding to the model_set
 size; when it previously did not.
 
-** Compound Model Implementation Changes **
-
+Compound Model Implementation Changes
+-------------------------------------
 
 Compound models previously were implemented using a metaclass
 for the compound model while also inheriting from the Model
@@ -169,11 +170,6 @@ compound models and correspondingly no longer supports
 expressions of model classes, but only expressions of
 model instances. Previously the expression tree was a private
 attribute. Now the compound class is itself an expression
-tree. The mapping of constituent parameters to the
-compound is not automatically done except when certain
-method or attribute calls are made, which are not normally
-done on subexpressions. There may be some special cases
-where it is necessary to force this by calling the `.map_parameters`
-method.
+tree.
 
 Many of the private methods of Compound Models have changed.

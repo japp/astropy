@@ -1,12 +1,12 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 import functools
 import itertools
-import numpy as np
 import operator
+from decimal import Decimal
+from datetime import timedelta
 
 import pytest
-
-from datetime import timedelta
+import numpy as np
 
 from astropy.time import (Time, TimeDelta, OperandTypeError, ScaleValueError,
                           TIME_SCALES, STANDARD_TIME_SCALES, TIME_DELTA_SCALES)
@@ -39,7 +39,7 @@ class TestTimeDelta:
         self.t2 = Time('2010-01-02 00:00:01', scale='utc')
         self.t3 = Time('2010-01-03 01:02:03', scale='utc', precision=9,
                        in_subfmt='date_hms', out_subfmt='date_hm',
-                       location=(-75.*u.degree, 30.*u.degree, 500*u.m))
+                       location=(-75. * u.degree, 30. * u.degree, 500 * u.m))
         self.t4 = Time('2010-01-01', scale='local')
         self.dt = TimeDelta(100.0, format='sec')
         self.dt_array = TimeDelta(np.arange(100, 1000, 100), format='sec')
@@ -267,6 +267,25 @@ class TestTimeDelta:
         assert dt.value == timedelta(days=1)
         assert dt.format == 'datetime'
 
+    def test_from_non_float(self):
+        dt = TimeDelta('1.000000000000001', format='jd')
+        assert dt != TimeDelta(1.000000000000001, format='jd')  # precision loss.
+        assert dt == TimeDelta(1, .000000000000001, format='jd')
+        dt2 = TimeDelta(Decimal('1.000000000000001'), format='jd')
+        assert dt2 == dt
+
+    def test_to_value(self):
+        dt = TimeDelta(86400.0, format='sec')
+        assert dt.to_value('jd') == 1.
+        assert dt.to_value('jd', 'str') == '1.0'
+        assert dt.to_value('sec', subfmt='str') == '86400.0'
+        with pytest.raises(ValueError, match=("not one of the known formats.*"
+                                              "failed to parse as a unit")):
+            dt.to_value('julian')
+
+        with pytest.raises(TypeError, match='missing required format or unit'):
+            dt.to_value()
+
 
 class TestTimeDeltaScales:
     """Test scale conversion for Time Delta.
@@ -278,7 +297,7 @@ class TestTimeDeltaScales:
                           '2012-07-01 00:00:00', '2012-07-01 12:00:00']
         self.t = dict((scale, Time(self.iso_times, scale=scale, precision=9))
                       for scale in TIME_SCALES)
-        self.dt = dict((scale, self.t[scale]-self.t[scale][0])
+        self.dt = dict((scale, self.t[scale] - self.t[scale][0])
                        for scale in TIME_SCALES)
 
     def test_delta_scales_definition(self):

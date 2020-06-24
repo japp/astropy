@@ -1,6 +1,5 @@
 # Licensed under a 3-clause BSD style license - see PYFITS.rst
 
-
 import gzip
 import itertools
 import io
@@ -404,7 +403,7 @@ def fileobj_name(f):
     string f itself is returned.
     """
 
-    if isinstance(f, str):
+    if isinstance(f, (str, bytes)):
         return f
     elif isinstance(f, gzip.GzipFile):
         # The .name attribute on GzipFiles does not always represent the name
@@ -681,7 +680,7 @@ def _array_to_file_like(arr, fileobj):
     if hasattr(np, 'nditer'):
         # nditer version for non-contiguous arrays
         for item in np.nditer(arr, order='C'):
-            fileobj.write(item.tostring())
+            fileobj.write(item.tobytes())
     else:
         # Slower version for Numpy versions without nditer;
         # The problem with flatiter is it doesn't preserve the original
@@ -690,10 +689,10 @@ def _array_to_file_like(arr, fileobj):
         if ((sys.byteorder == 'little' and byteorder == '>')
                 or (sys.byteorder == 'big' and byteorder == '<')):
             for item in arr.flat:
-                fileobj.write(item.byteswap().tostring())
+                fileobj.write(item.byteswap().tobytes())
         else:
             for item in arr.flat:
-                fileobj.write(item.tostring())
+                fileobj.write(item.tobytes())
 
 
 def _write_string(f, s):
@@ -727,7 +726,7 @@ def _convert_array(array, dtype):
             (np.issubdtype(array.dtype, np.number) and
              np.issubdtype(dtype, np.number))):
         # Includes a special case when both dtypes are at least numeric to
-        # account for ticket #218: https://aeon.stsci.edu/ssb/trac/pyfits/ticket/218
+        # account for old Trac ticket 218 (now inaccessible).
         return array.view(dtype)
     else:
         return array.astype(dtype)

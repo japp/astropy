@@ -1,9 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-
 import pytest
 import numpy as np
-
 from numpy.testing import assert_equal, assert_allclose
 
 try:
@@ -15,6 +13,7 @@ else:
 
 from astropy import units as u
 from astropy.stats.sigma_clipping import sigma_clip, SigmaClip, sigma_clipped_stats
+from astropy.utils.exceptions import AstropyUserWarning
 from astropy.utils.misc import NumpyRNGContext
 
 
@@ -170,7 +169,9 @@ def test_invalid_sigma_clip():
     data[3, 4] = np.nan
     data[1, 1] = np.inf
 
-    result = sigma_clip(data)
+    with pytest.warns(AstropyUserWarning,
+                      match=r'Input data contains invalid values'):
+        result = sigma_clip(data)
 
     # Pre #4051 if data contains any NaN or infs sigma_clip returns the
     # mask containing `False` only or TypeError if data also contains a
@@ -179,18 +180,24 @@ def test_invalid_sigma_clip():
     assert result.mask[3, 4]
     assert result.mask[1, 1]
 
-    result2 = sigma_clip(data, axis=0)
+    with pytest.warns(AstropyUserWarning,
+                      match=r'Input data contains invalid values'):
+        result2 = sigma_clip(data, axis=0)
     assert result2.mask[1, 1]
     assert result2.mask[3, 4]
 
-    result3 = sigma_clip(data, axis=0, copy=False)
+    with pytest.warns(AstropyUserWarning,
+                      match=r'Input data contains invalid values'):
+        result3 = sigma_clip(data, axis=0, copy=False)
     assert result3.mask[1, 1]
     assert result3.mask[3, 4]
 
     # stats along axis with all nans
     data[0, :] = np.nan     # row of all nans
-    result4, minarr, maxarr = sigma_clip(data, axis=1, masked=False,
-                                         return_bounds=True)
+    with pytest.warns(AstropyUserWarning,
+                      match=r'Input data contains invalid values'):
+        result4, minarr, maxarr = sigma_clip(data, axis=1, masked=False,
+                                             return_bounds=True)
     assert np.isnan(minarr[0])
     assert np.isnan(maxarr[0])
 
@@ -211,6 +218,10 @@ def test_sigmaclip_fully_masked():
                              mask=[[True, True], [True, True]])
     clipped_data = sigma_clip(data)
     np.ma.allequal(data, clipped_data)
+
+    clipped_data = sigma_clip(data, masked=False)
+    assert not isinstance(clipped_data, np.ma.MaskedArray)
+    assert np.all(np.isnan(clipped_data))
 
 
 def test_sigmaclip_empty_masked():
@@ -237,7 +248,7 @@ def test_sigma_clip_axis_tuple_3D():
     """
 
     data = np.sin(0.78 * np.arange(27)).reshape(3, 3, 3)
-    mask = np.zeros_like(data, dtype=np.bool)
+    mask = np.zeros_like(data, dtype=np.bool_)
 
     data_t = np.rollaxis(data, 1, 0)
     mask_t = np.rollaxis(mask, 1, 0)
@@ -272,3 +283,22 @@ def test_sigma_clippped_stats_unit():
     data = np.array([1, 1]) * u.kpc
     result = sigma_clipped_stats(data)
     assert result == (1. * u.kpc, 1. * u.kpc, 0. * u.kpc)
+
+
+def test_sigma_clippped_stats_all_masked():
+    """
+    Test sigma_clipped_stats when the input array is completely masked.
+    """
+
+    arr = np.ma.MaskedArray(np.arange(10), mask=True)
+    result = sigma_clipped_stats(arr)
+    assert result == (np.ma.masked, np.ma.masked, np.ma.masked)
+
+    arr = np.ma.MaskedArray(np.zeros(10), mask=False)
+    result = sigma_clipped_stats(arr, mask_value=0.)
+    assert result == (np.ma.masked, np.ma.masked, np.ma.masked)
+
+    arr = np.ma.MaskedArray(np.arange(10), mask=False)
+    mask = arr < 20
+    result = sigma_clipped_stats(arr, mask=mask)
+    assert result == (np.ma.masked, np.ma.masked, np.ma.masked)

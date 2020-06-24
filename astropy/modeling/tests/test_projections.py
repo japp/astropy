@@ -1,7 +1,7 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
 """Test sky projections defined in WCS Paper II"""
-
+# pylint: disable=invalid-name, no-member
 import os
 
 import pytest
@@ -30,7 +30,7 @@ MAPS_DIR = os.path.join(os.pardir, os.pardir, "wcs", "tests", "data", "maps")
 
 pars = [(x,) for x in projections.projcodes]
 # There is no groundtruth file for the XPH projection available here:
-#   http://www.atnf.csiro.au/people/mcalabre/WCS/example_data.html
+#   https://www.atnf.csiro.au/people/mcalabre/WCS/example_data.html
 pars.remove(('XPH',))
 
 
@@ -341,8 +341,8 @@ def test_affine_with_quantities():
                                                   translation=[0, 0] * u.pix)
     qaff.inverse = inv_qaff
     qx1, qy1 = qaff(xpix, ypix, equivalencies={
-            'x': u.pixel_scale(1 * u.deg / u.pix),
-            'y': u.pixel_scale(1 * u.deg / u.pix)})
+        'x': u.pixel_scale(1 * u.deg / u.pix),
+        'y': u.pixel_scale(1 * u.deg / u.pix)})
     x1, y1 = qaff.inverse(qx1, qy1, equivalencies={
         'x': u.pixel_scale(1 * u.deg / u.pix),
         'y': u.pixel_scale(1 * u.deg / u.pix)})

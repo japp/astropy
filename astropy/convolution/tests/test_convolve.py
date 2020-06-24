@@ -7,6 +7,8 @@ import numpy.ma as ma
 from astropy.convolution.convolve import convolve, convolve_fft
 from astropy.convolution.kernels import Gaussian2DKernel
 from astropy.utils.exceptions import AstropyUserWarning
+from astropy import units as u
+from astropy.utils.compat.context import nullcontext
 
 from numpy.testing import (assert_array_almost_equal_nulp,
                            assert_array_almost_equal,
@@ -218,9 +220,20 @@ class TestConvolve1D:
 
         y = np.array([0., 1., 0.], dtype='>f8')
 
-        z = convolve(x, y, boundary=boundary, nan_treatment=nan_treatment,
-                     normalize_kernel=normalize_kernel,
-                     preserve_nan=preserve_nan)
+        # Since the kernel is actually only one pixel wide (because of the
+        # zeros) the NaN value doesn't get interpolated over so a warning is
+        # expected.
+        if nan_treatment == 'interpolate' and not preserve_nan:
+            ctx = pytest.warns(AstropyUserWarning,
+                               match="nan_treatment='interpolate', however, "
+                                     "NaN values detected")
+        else:
+            ctx = nullcontext()
+
+        with ctx:
+            z = convolve(x, y, boundary=boundary, nan_treatment=nan_treatment,
+                        normalize_kernel=normalize_kernel,
+                        preserve_nan=preserve_nan)
 
         if preserve_nan:
             assert np.isnan(z[1])
@@ -959,3 +972,25 @@ def test_uninterpolated_nan_regions(boundary, normalize_kernel):
     result = convolve(image, kernel, boundary=boundary, nan_treatment='interpolate',
                       normalize_kernel=normalize_kernel)
     assert(~np.any(np.isnan(result))) # Note: negation
+
+
+def test_regressiontest_issue9168():
+    """
+    Issue #9168 pointed out that kernels can be (unitless) quantities, which
+    leads to crashes when inplace modifications are made to arrays in
+    convolve/convolve_fft, so we now strip the quantity aspects off of kernels.
+    """
+
+    x = np.array([[1., 2., 3.],
+                  [4., 5., 6.],
+                  [7., 8., 9.]],)
+
+    kernel_fwhm = 1*u.arcsec
+    pixel_size = 1*u.arcsec
+
+    kernel = Gaussian2DKernel(x_stddev=kernel_fwhm/pixel_size)
+
+    result = convolve_fft(x, kernel, boundary='fill', fill_value=np.nan,
+                          preserve_nan=True)
+    result = convolve(x, kernel, boundary='fill', fill_value=np.nan,
+                      preserve_nan=True)

@@ -7,11 +7,9 @@ import os
 from . import FitsTestCase
 from astropy.io.fits.convenience import writeto
 from astropy.io.fits.hdu import PrimaryHDU, hdulist
-from astropy.io.fits import Header, ImageHDU, HDUList
+from astropy.io.fits import Header, ImageHDU, HDUList, FITSDiff
 from astropy.io.fits.scripts import fitsdiff
-from astropy.tests.helper import catch_warnings
-from astropy.utils.exceptions import AstropyDeprecationWarning
-from astropy.version import version
+from astropy import __version__ as version
 
 
 class TestFITSDiff_script(FitsTestCase):
@@ -22,7 +20,7 @@ class TestFITSDiff_script(FitsTestCase):
 
     def test_noargs(self):
         with pytest.raises(SystemExit) as e:
-            fitsdiff.main()
+            fitsdiff.main([""])
         assert e.value.code == 2
 
     def test_oneargargs(self):
@@ -163,33 +161,6 @@ Primary HDU:\n\n   Data contains differences:
      1 different pixels found (1.00% different).\n""".format(version, tmp_a, tmp_b)
         assert err == ""
 
-    def test_fitsdiff_script_both_d_and_r(self, capsys):
-        a = np.arange(100).reshape(10, 10)
-        hdu_a = PrimaryHDU(data=a)
-        b = a.copy()
-        hdu_b = PrimaryHDU(data=b)
-        tmp_a = self.temp('testa.fits')
-        tmp_b = self.temp('testb.fits')
-        hdu_a.writeto(tmp_a)
-        hdu_b.writeto(tmp_b)
-        with catch_warnings(AstropyDeprecationWarning) as warning_lines:
-            fitsdiff.main(["-r", "1e-4", "-d", "1e-2", tmp_a, tmp_b])
-            # `rtol` is always ignored when `tolerance` is provided
-            assert warning_lines[0].category == AstropyDeprecationWarning
-            assert (str(warning_lines[0].message) ==
-                    '"-d" ("--difference-tolerance") was deprecated in version 2.0 '
-                    'and will be removed in a future version. '
-                    'Use "-r" ("--relative-tolerance") instead.')
-        out, err = capsys.readouterr()
-        assert out == """
- fitsdiff: {}
- a: {}
- b: {}
- Maximum number of different data values to be reported: 10
- Relative tolerance: 0.01, Absolute tolerance: 0.0
-
-No differences found.\n""".format(version, tmp_a, tmp_b)
-
     def test_wildcard(self):
         tmp1 = self.temp("tmp_file1")
         with pytest.raises(SystemExit) as e:
@@ -315,3 +286,18 @@ No differences found.\n""".format(version, tmp_a, tmp_b)
         out, err = capsys.readouterr()
         assert "testa.fits" in out
         assert "testb.fits" in out
+
+
+@pytest.mark.skip(reason="fails intentionally to show open files (see PR #10159)")
+def test_fitsdiff_openfile(tmpdir):
+    """Make sure that failing FITSDiff doesn't leave open files."""
+    path1 = str(tmpdir.join("file1.fits"))
+    path2 = str(tmpdir.join("file2.fits"))
+
+    hdulist = HDUList([PrimaryHDU(), ImageHDU(data=np.zeros(5))])
+    hdulist.writeto(path1)
+    hdulist[1].data[0] = 1
+    hdulist.writeto(path2)
+
+    diff = FITSDiff(path1, path2)
+    assert diff.identical, diff.report()

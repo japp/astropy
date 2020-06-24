@@ -1,12 +1,12 @@
 # Licensed under a 3-clause BSD style license - see PYFITS.rst
 
 import gzip
-import bz2
 import io
 import mmap
 import errno
 import os
 import pathlib
+import urllib.request
 import warnings
 import zipfile
 from unittest.mock import patch
@@ -22,9 +22,17 @@ from astropy.io.fits.file import _File, GZIP_MAGIC
 
 from astropy.io import fits
 from astropy.tests.helper import raises, catch_warnings, ignore_warnings
-from astropy.utils.data import conf, get_pkg_data_filename
+from astropy.utils.data import conf
 from astropy.utils.exceptions import AstropyUserWarning
 from astropy.utils import data
+
+# NOTE: Python can be built without bz2.
+try:
+    import bz2
+except ImportError:
+    HAS_BZ2 = False
+else:
+    HAS_BZ2 = True
 
 
 class TestCore(FitsTestCase):
@@ -32,10 +40,6 @@ class TestCore(FitsTestCase):
     @raises(OSError)
     def test_missing_file(self):
         fits.open(self.temp('does-not-exist.fits'))
-
-    def test_filename_is_bytes_object(self):
-        with pytest.raises(TypeError):
-            fits.open(self.data('ascii.fits').encode())
 
     def test_naxisj_check(self):
         with fits.open(self.data('o4sp040b0_raw.fits')) as hdulist:
@@ -70,8 +74,19 @@ class TestCore(FitsTestCase):
         """
         Testing when fits file is passed as pathlib.Path object #4412.
         """
-        fpath = pathlib.Path(get_pkg_data_filename('data/tdim.fits'))
+        fpath = pathlib.Path(self.data('tdim.fits'))
         with fits.open(fpath) as hdulist:
+            assert hdulist[0].filebytes() == 2880
+            assert hdulist[1].filebytes() == 5760
+
+            with fits.open(self.data('tdim.fits')) as hdulist2:
+                assert FITSDiff(hdulist2, hdulist).identical is True
+
+    def test_fits_file_bytes_object(self):
+        """
+        Testing when fits file is passed as bytes.
+        """
+        with fits.open(self.data('tdim.fits').encode()) as hdulist:
             assert hdulist[0].filebytes() == 2880
             assert hdulist[1].filebytes() == 5760
 
@@ -594,7 +609,7 @@ class TestFileFunctions(FitsTestCase):
         # But opening in ostream or append mode should be okay, since they
         # allow writing new files
         for mode in ('ostream', 'append'):
-            with fits.open(self.temp('foobar.fits'), mode=mode) as h:
+            with fits.open(self.temp('foobar.fits'), mode=mode) as _:
                 pass
 
             assert os.path.exists(self.temp('foobar.fits'))
@@ -603,24 +618,24 @@ class TestFileFunctions(FitsTestCase):
     def test_open_file_handle(self):
         # Make sure we can open a FITS file from an open file handle
         with open(self.data('test0.fits'), 'rb') as handle:
-            with fits.open(handle) as fitsfile:
+            with fits.open(handle) as _:
                 pass
 
         with open(self.temp('temp.fits'), 'wb') as handle:
-            with fits.open(handle, mode='ostream') as fitsfile:
+            with fits.open(handle, mode='ostream') as _:
                 pass
 
         # Opening without explicitly specifying binary mode should fail
         with pytest.raises(ValueError):
             with open(self.data('test0.fits')) as handle:
-                with fits.open(handle) as fitsfile:
+                with fits.open(handle) as _:
                     pass
 
         # All of these read modes should fail
         for mode in ['r', 'rt']:
             with pytest.raises(ValueError):
                 with open(self.data('test0.fits'), mode=mode) as handle:
-                    with fits.open(handle) as fitsfile:
+                    with fits.open(handle) as _:
                         pass
 
         # These update or write modes should fail as well
@@ -628,51 +643,44 @@ class TestFileFunctions(FitsTestCase):
                      'a', 'at', 'a+', 'at+']:
             with pytest.raises(ValueError):
                 with open(self.temp('temp.fits'), mode=mode) as handle:
-                    with fits.open(handle) as fitsfile:
+                    with fits.open(handle) as _:
                         pass
 
     def test_fits_file_handle_mode_combo(self):
         # This should work fine since no mode is given
         with open(self.data('test0.fits'), 'rb') as handle:
-            with fits.open(handle) as fitsfile:
+            with fits.open(handle) as _:
                 pass
 
         # This should work fine since the modes are compatible
         with open(self.data('test0.fits'), 'rb') as handle:
-            with fits.open(handle, mode='readonly') as fitsfile:
+            with fits.open(handle, mode='readonly') as _:
                 pass
 
         # This should not work since the modes conflict
         with pytest.raises(ValueError):
             with open(self.data('test0.fits'), 'rb') as handle:
-                with fits.open(handle, mode='ostream') as fitsfile:
+                with fits.open(handle, mode='ostream') as _:
                     pass
 
     def test_open_from_url(self):
-        import urllib.request
-        file_url = "file:///" + self.data('test0.fits')
+        file_url = 'file:///' + self.data('test0.fits').lstrip('/')
         with urllib.request.urlopen(file_url) as urlobj:
-            with fits.open(urlobj) as fits_handle:
+            with fits.open(urlobj) as _:
                 pass
 
         # It will not be possible to write to a file that is from a URL object
         for mode in ('ostream', 'append', 'update'):
             with pytest.raises(ValueError):
                 with urllib.request.urlopen(file_url) as urlobj:
-                    with fits.open(urlobj, mode=mode) as fits_handle:
+                    with fits.open(urlobj, mode=mode) as _:
                         pass
 
     @pytest.mark.remote_data(source='astropy')
     def test_open_from_remote_url(self):
-
-        import urllib.request
-
         for dataurl in (conf.dataurl, conf.dataurl_mirror):
-
             remote_url = '{}/{}'.format(dataurl, 'allsky/allsky_rosat.fits')
-
             try:
-
                 with urllib.request.urlopen(remote_url) as urlobj:
                     with fits.open(urlobj) as fits_handle:
                         assert len(fits_handle) == 1
@@ -682,7 +690,6 @@ class TestFileFunctions(FitsTestCase):
                         with urllib.request.urlopen(remote_url) as urlobj:
                             with fits.open(urlobj, mode=mode) as fits_handle:
                                 assert len(fits_handle) == 1
-
             except (urllib.error.HTTPError, urllib.error.URLError):
                 continue
             else:
@@ -750,9 +757,10 @@ class TestFileFunctions(FitsTestCase):
         'append' mode raises an error"""
 
         with pytest.raises(OSError):
-            with fits.open(self._make_gzip_file('append.gz'), mode='append') as fits_handle:
+            with fits.open(self._make_gzip_file('append.gz'), mode='append') as _:
                 pass
 
+    @pytest.mark.skipif(not HAS_BZ2, reason='Python built without bz2 module')
     def test_open_bzipped(self):
         bzip_file = self._make_bzip2_file()
         with ignore_warnings():
@@ -764,12 +772,14 @@ class TestFileFunctions(FitsTestCase):
                 assert fits_handle._file.compression == 'bzip2'
                 assert len(fits_handle) == 5
 
+    @pytest.mark.skipif(not HAS_BZ2, reason='Python built without bz2 module')
     def test_open_bzipped_from_handle(self):
         with open(self._make_bzip2_file(), 'rb') as handle:
             with fits.open(handle) as fits_handle:
                 assert fits_handle._file.compression == 'bzip2'
                 assert len(fits_handle) == 5
 
+    @pytest.mark.skipif(not HAS_BZ2, reason='Python built without bz2 module')
     def test_detect_bzipped(self):
         """Test detection of a bzip2 file when the extension is not .bz2."""
         with ignore_warnings():
@@ -777,6 +787,7 @@ class TestFileFunctions(FitsTestCase):
                 assert fits_handle._file.compression == 'bzip2'
                 assert len(fits_handle) == 5
 
+    @pytest.mark.skipif(not HAS_BZ2, reason='Python built without bz2 module')
     def test_writeto_bzip2_fileobj(self):
         """Test writing to a bz2.BZ2File file like object"""
         fileobj = bz2.BZ2File(self.temp('test.fits.bz2'), 'w')
@@ -789,6 +800,7 @@ class TestFileFunctions(FitsTestCase):
         with fits.open(self.temp('test.fits.bz2')) as hdul:
             assert hdul[0].header == h.header
 
+    @pytest.mark.skipif(not HAS_BZ2, reason='Python built without bz2 module')
     def test_writeto_bzip2_filename(self):
         """Test writing to a bzip2 file by name"""
         filename = self.temp('testname.fits.bz2')
@@ -1273,6 +1285,14 @@ class TestFileFunctions(FitsTestCase):
             bz.close()
 
         return bzfile
+
+    def test_simulateonly(self):
+        """Write to None simulates writing."""
+
+        with fits.open(self.data('test0.fits')) as hdul:
+            hdul.writeto(None)
+            hdul[0].writeto(None)
+            hdul[0].header.tofile(None)
 
 
 class TestStreamingFunctions(FitsTestCase):

@@ -1,6 +1,5 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-
 from collections import OrderedDict
 
 import pytest
@@ -8,30 +7,29 @@ import numpy as np
 
 from astropy.tests.helper import catch_warnings
 from astropy.table import Table, QTable, TableMergeError, Column, MaskedColumn
-from astropy.table.operations import _get_out_class
+from astropy.table.operations import _get_out_class, join_skycoord, join_distance
 from astropy import units as u
 from astropy.utils import metadata
 from astropy.utils.metadata import MergeConflictError
 from astropy import table
 from astropy.time import Time
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import (SkyCoord, SphericalRepresentation,
+                                 UnitSphericalRepresentation,
+                                 CartesianRepresentation,
+                                 BaseRepresentationOrDifferential,
+                                 search_around_3d)
+from astropy.coordinates.tests.test_representation import representation_equal
+from astropy.io.misc.asdf.tags.helpers import skycoord_equal
+
+try:
+    import scipy  # noqa
+    HAS_SCIPY = True
+except ImportError:
+    HAS_SCIPY = False
 
 
 def sort_eq(list1, list2):
     return sorted(list1) == sorted(list2)
-
-
-def skycoord_equal(sc1, sc2):
-    if not sc1.is_equivalent_frame(sc2):
-        return False
-    if sc1.representation_type is not sc2.representation_type:
-        return False
-    if sc1.shape != sc2.shape:
-        return False  # Maybe raise ValueError corresponding to future numpy behavior
-    eq = np.ones(shape=sc1.shape, dtype=bool)
-    for comp in sc1.data.components:
-        eq &= getattr(sc1.data, comp) == getattr(sc2.data, comp)
-    return np.all(eq)
 
 
 class TestJoin():
@@ -328,7 +326,7 @@ class TestJoin():
         # masked, but col 'c' stays since MyMaskedCol supports masking.
         for name, exp_type in (('a', MyCol), ('b', MaskedColumn), ('c', MyMaskedCol),
                                ('d', MyCol), ('e', MyMaskedCol)):
-            assert type(t12[name] is exp_type)
+            assert type(t21[name] is exp_type)
 
     def test_col_rename(self, operation_table_type):
         self._setup(operation_table_type)
@@ -522,6 +520,9 @@ class TestJoin():
             # SkyCoord doesn't support __eq__ so use our own
             assert skycoord_equal(out['m1'], col[[0, 3]])
             assert skycoord_equal(out['m2'], col[[0, 3]])
+        elif 'Repr' in cls_name or 'Diff' in cls_name:
+            assert np.all(representation_equal(out['m1'], col[[0, 3]]))
+            assert np.all(representation_equal(out['m2'], col[[0, 3]]))
         else:
             assert np.all(out['m1'] == col[[0, 3]])
             assert np.all(out['m2'] == col[[0, 3]])
@@ -557,18 +558,168 @@ class TestJoin():
             for join_type in ('outer', 'left', 'right'):
                 with pytest.raises(NotImplementedError) as err:
                     table.join(t1, t2, join_type='outer')
-                assert ('join requires masking' in str(err.value) or
-                        'join unavailable' in str(err.value))
+                assert ('join requires masking' in str(err.value)
+                        or 'join unavailable' in str(err.value))
+
+    def test_cartesian_join(self, operation_table_type):
+        t1 = Table(rows=[(1, 'a'),
+                         (2, 'b')], names=['a', 'b'])
+        t2 = Table(rows=[(3, 'c'),
+                         (4, 'd')], names=['a', 'c'])
+        t12 = table.join(t1, t2, join_type='cartesian')
+
+        assert t1.colnames == ['a', 'b']
+        assert t2.colnames == ['a', 'c']
+        assert len(t12) == len(t1) * len(t2)
+        assert str(t12).splitlines() == [
+            'a_1  b  a_2  c ',
+            '--- --- --- ---',
+            '  1   a   3   c',
+            '  1   a   4   d',
+            '  2   b   3   c',
+            '  2   b   4   d']
+
+        with pytest.raises(ValueError, match='cannot supply keys for a cartesian join'):
+            t12 = table.join(t1, t2, join_type='cartesian', keys='a')
+
+    @pytest.mark.skipif('not HAS_SCIPY')
+    def test_join_with_join_skycoord_sky(self):
+        sc1 = SkyCoord([0, 1, 1.1, 2], [0, 0, 0, 0], unit='deg')
+        sc2 = SkyCoord([0.5, 1.05, 2.1], [0, 0, 0], unit='deg')
+        t1 = Table([sc1], names=['sc'])
+        t2 = Table([sc2], names=['sc'])
+        t12 = table.join(t1, t2, join_funcs={'sc': join_skycoord(0.2 * u.deg)})
+        exp = ['sc_id   sc_1    sc_2  ',
+               '      deg,deg deg,deg ',
+               '----- ------- --------',
+               '    1 1.0,0.0 1.05,0.0',
+               '    1 1.1,0.0 1.05,0.0',
+               '    2 2.0,0.0  2.1,0.0']
+        assert str(t12).splitlines() == exp
+
+    @pytest.mark.skipif('not HAS_SCIPY')
+    @pytest.mark.parametrize('distance_func', ['search_around_3d', search_around_3d])
+    def test_join_with_join_skycoord_3d(self, distance_func):
+        sc1 = SkyCoord([0, 1, 1.1, 2]*u.deg, [0, 0, 0, 0]*u.deg, [1, 1, 2, 1]*u.m)
+        sc2 = SkyCoord([0.5, 1.05, 2.1]*u.deg, [0, 0, 0]*u.deg, [1, 1, 1]*u.m)
+        t1 = Table([sc1], names=['sc'])
+        t2 = Table([sc2], names=['sc'])
+        join_func = join_skycoord(np.deg2rad(0.2) * u.m,
+                                  distance_func=distance_func)
+        t12 = table.join(t1, t2, join_funcs={'sc': join_func})
+        exp = ['sc_id     sc_1        sc_2    ',
+               '       deg,deg,m   deg,deg,m  ',
+               '----- ----------- ------------',
+               '    1 1.0,0.0,1.0 1.05,0.0,1.0',
+               '    2 2.0,0.0,1.0  2.1,0.0,1.0']
+        assert str(t12).splitlines() == exp
+
+    @pytest.mark.skipif('not HAS_SCIPY')
+    def test_join_with_join_distance_1d(self):
+        c1 = [0, 1, 1.1, 2]
+        c2 = [0.5, 1.05, 2.1]
+        t1 = Table([c1], names=['col'])
+        t2 = Table([c2], names=['col'])
+        join_func = join_distance(0.2,
+                                  kdtree_args={'leafsize': 32},
+                                  query_args={'p': 2})
+        t12 = table.join(t1, t2, join_type='outer', join_funcs={'col': join_func})
+        exp = ['col_id col_1 col_2',
+               '------ ----- -----',
+               '     1   1.0  1.05',
+               '     1   1.1  1.05',
+               '     2   2.0   2.1',
+               '     3   0.0    --',
+               '     4    --   0.5']
+        assert str(t12).splitlines() == exp
+
+    @pytest.mark.skipif('not HAS_SCIPY')
+    def test_join_with_join_distance_1d_multikey(self):
+        from astropy.table.operations import _apply_join_funcs
+
+        c1 = [0, 1, 1.1, 1.2, 2]
+        id1 = [0, 1, 2, 2, 3]
+        o1 = ['a', 'b', 'c', 'd', 'e']
+        c2 = [0.5, 1.05, 2.1]
+        id2 = [0, 2, 4]
+        o2 = ['z', 'y', 'x']
+        t1 = Table([c1, id1, o1], names=['col', 'id', 'o1'])
+        t2 = Table([c2, id2, o2], names=['col', 'id', 'o2'])
+        join_func = join_distance(0.2)
+        join_funcs = {'col': join_func}
+        t12 = table.join(t1, t2, join_type='outer', join_funcs=join_funcs)
+        exp = ['col_id col_1  id  o1 col_2  o2',
+               '------ ----- --- --- ----- ---',
+               '     1   1.0   1   b    --  --',
+               '     1   1.1   2   c  1.05   y',
+               '     1   1.2   2   d  1.05   y',
+               '     2   2.0   3   e    --  --',
+               '     2    --   4  --   2.1   x',
+               '     3   0.0   0   a    --  --',
+               '     4    --   0  --   0.5   z']
+        assert str(t12).splitlines() == exp
+
+        left, right, keys = _apply_join_funcs(t1, t2, ('col', 'id'), join_funcs)
+        assert keys == ('col_id', 'id')
+
+    @pytest.mark.skipif('not HAS_SCIPY')
+    def test_join_with_join_distance_1d_quantity(self):
+        c1 = [0, 1, 1.1, 2] * u.m
+        c2 = [500, 1050, 2100] * u.mm
+        t1 = QTable([c1], names=['col'])
+        t2 = QTable([c2], names=['col'])
+        join_func = join_distance(20 * u.cm)
+        t12 = table.join(t1, t2, join_funcs={'col': join_func})
+        exp = ['col_id col_1 col_2 ',
+               '         m     mm  ',
+               '------ ----- ------',
+               '     1   1.0 1050.0',
+               '     1   1.1 1050.0',
+               '     2   2.0 2100.0']
+        assert str(t12).splitlines() == exp
+
+        # Generate column name conflict
+        t2['col_id'] = [0, 0, 0]
+        t2['col__id'] = [0, 0, 0]
+        t12 = table.join(t1, t2, join_funcs={'col': join_func})
+        exp = ['col___id col_1 col_2  col_id col__id',
+               '           m     mm                 ',
+               '-------- ----- ------ ------ -------',
+               '       1   1.0 1050.0      0       0',
+               '       1   1.1 1050.0      0       0',
+               '       2   2.0 2100.0      0       0']
+        assert str(t12).splitlines() == exp
+
+    @pytest.mark.skipif('not HAS_SCIPY')
+    def test_join_with_join_distance_2d(self):
+        c1 = np.array([[0, 1, 1.1, 2],
+                       [0, 0, 1, 0]]).transpose()
+        c2 = np.array([[0.5, 1.05, 2.1],
+                       [0, 0, 0]]).transpose()
+        t1 = Table([c1], names=['col'])
+        t2 = Table([c2], names=['col'])
+        join_func = join_distance(0.2,
+                                  kdtree_args={'leafsize': 32},
+                                  query_args={'p': 2})
+        t12 = table.join(t1, t2, join_type='outer', join_funcs={'col': join_func})
+        exp = ['col_id col_1 [2]   col_2 [2] ',
+               '------ ---------- -----------',
+               '     1 1.0 .. 0.0 1.05 .. 0.0',
+               '     2 2.0 .. 0.0  2.1 .. 0.0',
+               '     3 0.0 .. 0.0    -- .. --',
+               '     4 1.1 .. 1.0    -- .. --',
+               '     5   -- .. --  0.5 .. 0.0']
+        assert str(t12).splitlines() == exp
 
 
 class TestSetdiff():
 
     def _setup(self, t_cls=Table):
         lines1 = [' a   b ',
-                 '  0 foo ',
-                 '  1 foo ',
-                 '  1 bar ',
-                 '  2 bar ']
+                  '  0 foo ',
+                  '  1 foo ',
+                  '  1 bar ',
+                  '  2 bar ']
         lines2 = [' a   b ',
                   '  0 foo ',
                   '  3 foo ',
@@ -606,7 +757,7 @@ class TestSetdiff():
         self._setup(operation_table_type)
 
         with pytest.raises(ValueError):
-            out = table.setdiff(self.t3, self.t1)
+            table.setdiff(self.t3, self.t1)
 
     def test_extra_col_right_table(self, operation_table_type):
         self._setup(operation_table_type)
@@ -634,7 +785,7 @@ class TestSetdiff():
         self._setup(operation_table_type)
 
         with pytest.raises(ValueError):
-            out = table.setdiff(self.t3, self.t1, keys=['a', 'd'])
+            table.setdiff(self.t3, self.t1, keys=['a', 'd'])
 
 
 class TestVStack():
@@ -969,14 +1120,20 @@ class TestVStack():
         cls_name = type(col).__name__
 
         # Vstack works for these classes:
-        implemented_mixin_classes = ['Quantity', 'Angle', 'Time',
-                                     'Latitude', 'Longitude',
-                                     'EarthLocation']
-        if cls_name in implemented_mixin_classes:
+        if isinstance(col, (u.Quantity, Time, SkyCoord,
+                            BaseRepresentationOrDifferential)):
             out = table.vstack([t, t])
             assert len(out) == len_col * 2
-            assert np.all(out['a'][:len_col] == col)
-            assert np.all(out['a'][len_col:] == col)
+            if cls_name == 'SkyCoord':
+                # Argh, SkyCoord needs __eq__!!
+                assert skycoord_equal(out['a'][len_col:], col)
+                assert skycoord_equal(out['a'][:len_col], col)
+            elif 'Repr' in cls_name or 'Diff' in cls_name:
+                assert np.all(representation_equal(out['a'][:len_col], col))
+                assert np.all(representation_equal(out['a'][len_col:], col))
+            else:
+                assert np.all(out['a'][:len_col] == col)
+                assert np.all(out['a'][len_col:] == col)
         else:
             with pytest.raises(NotImplementedError) as err:
                 table.vstack([t, t])
@@ -1000,11 +1157,28 @@ class TestVStack():
         else:
             with pytest.raises(NotImplementedError) as err:
                 table.vstack([t, t2], join_type='outer')
-            assert ('vstack requires masking' in str(err.value) or
-                    'vstack unavailable' in str(err.value))
+            assert ('vstack requires masking' in str(err.value)
+                    or 'vstack unavailable' in str(err.value))
+
+    def test_vstack_different_representation(self):
+        """Test that representations can be mixed together."""
+        rep1 = CartesianRepresentation([1, 2]*u.km, [3, 4]*u.km, 1*u.km)
+        rep2 = SphericalRepresentation([0]*u.deg, [0]*u.deg, 10*u.km)
+        t1 = Table([rep1])
+        t2 = Table([rep2])
+        t12 = table.vstack([t1, t2])
+        expected = CartesianRepresentation([1, 2, 10]*u.km,
+                                           [3, 4, 0]*u.km,
+                                           [1, 1, 0]*u.km)
+        assert np.all(representation_equal(t12['col0'], expected))
+
+        rep3 = UnitSphericalRepresentation([0]*u.deg, [0]*u.deg)
+        t3 = Table([rep3])
+        with pytest.raises(ValueError, match='loss of information'):
+            table.vstack([t1, t3])
 
 
-class TestCStack():
+class TestDStack():
 
     def _setup(self, t_cls=Table):
         self.t1 = t_cls.read([' a   b',
@@ -1031,7 +1205,7 @@ class TestCStack():
                               ' 6.  foo  3'], format='ascii')
 
     @staticmethod
-    def compare_cstack(tables, out):
+    def compare_dstack(tables, out):
         for ii, tbl in enumerate(tables):
             for name, out_col in out.columns.items():
                 if name in tbl.colnames:
@@ -1051,15 +1225,15 @@ class TestCStack():
                     # Column missing for this table, out must have a mask with all True.
                     assert np.all(out[name].mask[:, ii])
 
-    def test_cstack_table_column(self, operation_table_type):
+    def test_dstack_table_column(self, operation_table_type):
         """Stack a table with 3 cols and one column (gets auto-converted to Table).
         """
         self._setup(operation_table_type)
         t2 = self.t1.copy()
-        out = table.cstack([self.t1, t2['a']])
-        self.compare_cstack([self.t1, t2[('a',)]], out)
+        out = table.dstack([self.t1, t2['a']])
+        self.compare_dstack([self.t1, t2[('a',)]], out)
 
-    def test_cstack_basic_outer(self, operation_table_type):
+    def test_dstack_basic_outer(self, operation_table_type):
         if operation_table_type is QTable:
             pytest.xfail('Quantity columns do not support masking.')
         self._setup(operation_table_type)
@@ -1068,57 +1242,75 @@ class TestCStack():
         t4 = self.t4
         t4['a'].mask[0] = True
         # Test for non-masked table
-        t12 = table.cstack([t1, t2], join_type='outer')
+        t12 = table.dstack([t1, t2], join_type='outer')
         assert type(t12) is operation_table_type
         assert type(t12['a']) is type(t1['a'])
         assert type(t12['b']) is type(t1['b'])
-        self.compare_cstack([t1, t2], t12)
+        self.compare_dstack([t1, t2], t12)
 
         # Test for masked table
-        t124 = table.cstack([t1, t2, t4], join_type='outer')
+        t124 = table.dstack([t1, t2, t4], join_type='outer')
         assert type(t124) is operation_table_type
         assert type(t124['a']) is type(t4['a'])
         assert type(t124['b']) is type(t4['b'])
-        self.compare_cstack([t1, t2, t4], t124)
+        self.compare_dstack([t1, t2, t4], t124)
 
-    def test_cstack_basic_inner(self, operation_table_type):
+    def test_dstack_basic_inner(self, operation_table_type):
         self._setup(operation_table_type)
         t1 = self.t1
         t2 = self.t2
         t4 = self.t4
 
         # Test for masked table
-        t124 = table.cstack([t1, t2, t4], join_type='inner')
+        t124 = table.dstack([t1, t2, t4], join_type='inner')
         assert type(t124) is operation_table_type
         assert type(t124['a']) is type(t4['a'])
         assert type(t124['b']) is type(t4['b'])
-        self.compare_cstack([t1, t2, t4], t124)
+        self.compare_dstack([t1, t2, t4], t124)
 
-    def test_cstack_multi_dimension_column(self, operation_table_type):
+    def test_dstack_multi_dimension_column(self, operation_table_type):
         self._setup(operation_table_type)
         t3 = self.t3
         t5 = self.t5
         t2 = self.t2
-        t35 = table.cstack([t3, t5])
+        t35 = table.dstack([t3, t5])
         assert type(t35) is operation_table_type
         assert type(t35['a']) is type(t3['a'])
         assert type(t35['b']) is type(t3['b'])
-        self.compare_cstack([t3, t5], t35)
+        self.compare_dstack([t3, t5], t35)
 
         with pytest.raises(TableMergeError):
-            table.cstack([t2, t3])
+            table.dstack([t2, t3])
 
-    def test_cstack_different_length_table(self, operation_table_type):
+    def test_dstack_different_length_table(self, operation_table_type):
         self._setup(operation_table_type)
         t2 = self.t2
         t6 = self.t6
         with pytest.raises(ValueError):
-            table.cstack([t2, t6])
+            table.dstack([t2, t6])
 
-    def test_cstack_single_table(self):
+    def test_dstack_single_table(self):
         self._setup(Table)
-        out = table.cstack(self.t1)
+        out = table.dstack(self.t1)
         assert np.all(out == self.t1)
+
+    def test_dstack_representation(self):
+        rep1 = SphericalRepresentation([1, 2]*u.deg, [3, 4]*u.deg, 1*u.kpc)
+        rep2 = SphericalRepresentation([10, 20]*u.deg, [30, 40]*u.deg, 10*u.kpc)
+        t1 = Table([rep1])
+        t2 = Table([rep2])
+        t12 = table.dstack([t1, t2])
+        assert np.all(representation_equal(t12['col0'][:, 0], rep1))
+        assert np.all(representation_equal(t12['col0'][:, 1], rep2))
+
+    def test_dstack_skycoord(self):
+        sc1 = SkyCoord([1, 2]*u.deg, [3, 4]*u.deg)
+        sc2 = SkyCoord([10, 20]*u.deg, [30, 40]*u.deg)
+        t1 = Table([sc1])
+        t2 = Table([sc2])
+        t12 = table.dstack([t1, t2])
+        assert skycoord_equal(sc1, t12['col0'][:, 0])
+        assert skycoord_equal(sc2, t12['col0'][:, 1])
 
 
 class TestHStack():
@@ -1356,6 +1548,9 @@ class TestHStack():
         if cls_name == 'SkyCoord':
             assert skycoord_equal(out['col0_1'], col1[:len(col2)])
             assert skycoord_equal(out['col0_2'], col2)
+        elif 'Repr' in cls_name or 'Diff' in cls_name:
+            assert np.all(representation_equal(out['col0_1'], col1[:len(col2)]))
+            assert np.all(representation_equal(out['col0_2'], col2))
         else:
             assert np.all(out['col0_1'] == col1[:len(col2)])
             assert np.all(out['col0_2'] == col2)
@@ -1390,7 +1585,7 @@ def test_unique(operation_table_type):
          ' 0 a 0.0 4',
          ' 1 a 2.0 6',
          ' 1 c 3.0 5',
-        ], format='ascii')
+         ], format='ascii')
 
     tu = operation_table_type(np.sort(t[:-1]))
 
@@ -1474,7 +1669,7 @@ def test_unique(operation_table_type):
                                '  2   b 7.0   0',
                                ' --   c 3.0   5']
 
-    with pytest.raises(ValueError) as e:
+    with pytest.raises(ValueError):
         t1_mu = table.unique(t1_m, silent=True, keys='a')
 
     t1_m = operation_table_type(t, masked=True)
@@ -1516,6 +1711,82 @@ def test_vstack_unicode():
     t2 = table.vstack([t, t])
     assert len(t2) == 2
     assert t2['a'].itemsize == 4
+
+
+def test_join_mixins_time_quantity():
+    """
+    Test for table join using non-ndarray key columns.
+    """
+    tm1 = Time([2, 1, 2], format='cxcsec')
+    q1 = [2, 1, 1] * u.m
+    idx1 = [1, 2, 3]
+    tm2 = Time([2, 3], format='cxcsec')
+    q2 = [2, 3] * u.m
+    idx2 = [10, 20]
+    t1 = Table([tm1, q1, idx1], names=['tm', 'q', 'idx'])
+    t2 = Table([tm2, q2, idx2], names=['tm', 'q', 'idx'])
+    # Output:
+    #
+    # <Table length=4>
+    #         tm            q    idx_1 idx_2
+    #                       m
+    #       object       float64 int64 int64
+    # ------------------ ------- ----- -----
+    # 0.9999999999969589     1.0     2    --
+    #   2.00000000000351     1.0     3    --
+    #   2.00000000000351     2.0     1    10
+    #  3.000000000000469     3.0    --    20
+
+    t12 = table.join(t1, t2, join_type='outer', keys=['tm', 'q'])
+    # Key cols are lexically sorted
+    assert np.all(t12['tm'] == Time([1, 2, 2, 3], format='cxcsec'))
+    assert np.all(t12['q'] == [1, 1, 2, 3] * u.m)
+    assert np.all(t12['idx_1'] == np.ma.array([2, 3, 1, 0], mask=[0, 0, 0, 1]))
+    assert np.all(t12['idx_2'] == np.ma.array([0, 0, 10, 20], mask=[1, 1, 0, 0]))
+
+
+def test_join_mixins_not_sortable():
+    """
+    Test for table join using non-ndarray key columns that are not sortable.
+    """
+    sc = SkyCoord([1, 2], [3, 4], unit='deg,deg')
+    t1 = Table([sc, [1, 2]], names=['sc', 'idx1'])
+    t2 = Table([sc, [10, 20]], names=['sc', 'idx2'])
+
+    with pytest.raises(TypeError, match='one or more key columns are not sortable'):
+        table.join(t1, t2, keys='sc')
+
+
+def test_join_non_1d_key_column():
+    c1 = [[1, 2], [3, 4]]
+    c2 = [1, 2]
+    t1 = Table([c1, c2], names=['a', 'b'])
+    t2 = t1.copy()
+    with pytest.raises(ValueError, match="key column 'a' must be 1-d"):
+        table.join(t1, t2, keys='a')
+
+
+def test_sort_indexed_table():
+    """Test fix for #9473 and #6545"""
+    t = Table([[1, 3, 2], [6, 4, 5]], names=('a', 'b'))
+    t.add_index('a')
+    t.sort('a')
+    assert np.all(t['a'] == [1, 2, 3])
+    assert np.all(t['b'] == [6, 5, 4])
+    t.sort('b')
+    assert np.all(t['b'] == [4, 5, 6])
+    assert np.all(t['a'] == [3, 2, 1])
+
+    from astropy.timeseries import TimeSeries
+    times = ['2016-01-01', '2018-01-01', '2017-01-01']
+    tm = Time(times)
+    ts = TimeSeries(time=times)
+    ts['flux'] = [3, 2, 1]
+    ts.sort('flux')
+    assert np.all(ts['flux'] == [1, 2, 3])
+    ts.sort('time')
+    assert np.all(ts['flux'] == [3, 1, 2])
+    assert np.all(ts['time'] == tm[[0, 2, 1]])
 
 
 def test_get_out_class():
@@ -1598,3 +1869,23 @@ def test_stack_columns():
 
     with pytest.raises(ValueError):
         t = table.vstack([q, cq])
+
+
+def test_mixin_join_regression():
+    # This used to trigger a ValueError:
+    # ValueError: NumPy boolean array indexing assignment cannot assign
+    # 6 input values to the 4 output values where the mask is true
+
+    t1 = QTable()
+    t1['index'] = [1, 2, 3, 4, 5]
+    t1['flux1'] = [2, 3, 2, 1, 1] * u.Jy
+    t1['flux2'] = [2, 3, 2, 1, 1] * u.Jy
+
+    t2 = QTable()
+    t2['index'] = [3, 4, 5, 6]
+    t2['flux1'] = [2, 1, 1, 3] * u.Jy
+    t2['flux2'] = [2, 1, 1, 3] * u.Jy
+
+    t12 = table.join(t1, t2, keys=('index', 'flux1', 'flux2'), join_type='outer')
+
+    assert len(t12) == 6

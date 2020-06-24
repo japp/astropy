@@ -4,15 +4,16 @@
 import os
 import re
 import warnings
-from collections import OrderedDict
+from copy import deepcopy
 
 from astropy.io import registry as io_registry
 from astropy import units as u
 from astropy.table import Table, serialize, meta, Column, MaskedColumn
 from astropy.table.table import has_info_class
 from astropy.time import Time
-from astropy.utils.exceptions import AstropyUserWarning
 from astropy.utils.data_info import MixinInfo, serialize_context_as
+from astropy.utils.exceptions import (AstropyUserWarning,
+                                      AstropyDeprecationWarning)
 from . import HDUList, TableHDU, BinTableHDU, GroupsHDU
 from .column import KEYWORD_NAMES, _fortran_to_python_format
 from .convenience import table_to_hdu
@@ -93,7 +94,21 @@ def _decode_mixins(tbl):
     del tbl.meta['comments'][i0:i1 + 1]
     if not tbl.meta['comments']:
         del tbl.meta['comments']
-    info = meta.get_header_from_yaml(lines)
+
+    try:
+        info = meta.get_header_from_yaml(lines)
+    except ImportError as exc:
+        if 'PyYAML package is required' in str(exc):
+            warnings.warn(
+                "the file contains information about Astropy native objects "
+                "(mixin columns) that have been serialized when writing it, "
+                "but the PyYAML package is required to read those. Without "
+                "this package some information will be missing in the table",
+                AstropyUserWarning
+            )
+            return tbl
+        else:
+            raise
 
     # Add serialized column information to table meta for use in constructing mixins
     tbl.meta['__serialized_columns__'] = info['meta']['__serialized_columns__']
@@ -158,7 +173,7 @@ def read_table_fits(input, hdu=None, astropy_native=False, memmap=False,
     if isinstance(input, HDUList):
 
         # Parse all table objects
-        tables = OrderedDict()
+        tables = dict()
         for ihdu, hdu_item in enumerate(input):
             if isinstance(hdu_item, (TableHDU, BinTableHDU, GroupsHDU)):
                 tables[ihdu] = hdu_item
@@ -167,7 +182,7 @@ def read_table_fits(input, hdu=None, astropy_native=False, memmap=False,
             if hdu is None:
                 warnings.warn("hdu= was not specified but multiple tables"
                               " are present, reading in first available"
-                              " table (hdu={})".format(first(tables)),
+                              f" table (hdu={first(tables)})",
                               AstropyUserWarning)
                 hdu = first(tables)
 
@@ -181,7 +196,24 @@ def read_table_fits(input, hdu=None, astropy_native=False, memmap=False,
                 raise ValueError(f"No table found in hdu={hdu}")
 
         elif len(tables) == 1:
+            if hdu is not None:
+                msg = None
+                try:
+                    hdi = input.index_of(hdu)
+                except KeyError:
+                    msg = f"Specified hdu={hdu} not found"
+                else:
+                    if hdi >= len(input):
+                        msg = f"Specified hdu={hdu} not found"
+                    elif hdi not in tables:
+                        msg = f"No table found in specified hdu={hdu}"
+                if msg is not None:
+                    warnings.warn(f"{msg}, reading in first available table "
+                                  f"(hdu={first(tables)}) instead. This will"
+                                  " result in an error in future versions!",
+                                  AstropyDeprecationWarning)
             table = tables[first(tables)]
+
         else:
             raise ValueError("No table found")
 
@@ -328,6 +360,13 @@ def _encode_mixins(tbl):
     # still go through the serialized columns machinery.
     if encode_tbl is tbl and not info_lost:
         return tbl
+
+    # Copy the meta dict if it was not copied by represent_mixins_as_columns.
+    # We will modify .meta['comments'] below and we do not want to see these
+    # comments in the input table.
+    if encode_tbl is tbl:
+        meta_copy = deepcopy(tbl.meta)
+        encode_tbl = Table(tbl.columns, meta=meta_copy, copy=False)
 
     # Get the YAML serialization of information describing the table columns.
     # This is re-using ECSV code that combined existing table.meta with with

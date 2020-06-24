@@ -1,11 +1,11 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-
 import io
 
 # THIRD-PARTY
 import numpy as np
 from numpy.testing import assert_array_equal
+import pytest
 
 # LOCAL
 from astropy.io.votable import converters
@@ -40,9 +40,8 @@ def test_oversize_char():
 
 def test_char_mask():
     config = {'verify': 'exception'}
-    field = tree.Field(
-        None, name='c', datatype='char',
-        config=config)
+    field = tree.Field(None, name='c', arraysize='1', datatype='char',
+                       config=config)
     c = converters.get_converter(field, config=config)
     assert c.output("Foo", True) == ''
 
@@ -61,11 +60,59 @@ def test_oversize_unicode():
 
 def test_unicode_mask():
     config = {'verify': 'exception'}
-    field = tree.Field(
-        None, name='c', datatype='unicodeChar',
-        config=config)
+    field = tree.Field(None, name='c', arraysize='1', datatype='unicodeChar',
+                       config=config)
     c = converters.get_converter(field, config=config)
     assert c.output("Foo", True) == ''
+
+
+def test_unicode_as_char():
+    config = {'verify': 'exception'}
+    field = tree.Field(
+        None, name='unicode_in_char', datatype='char',
+        arraysize='*', config=config)
+    c = converters.get_converter(field, config=config)
+
+    # Test parsing.
+    c.parse('XYZ')  # ASCII succeeds
+    with pytest.warns(
+            exceptions.W55,
+            match=r'FIELD \(unicode_in_char\) has datatype="char" but contains non-ASCII value'):
+        c.parse("zła")  # non-ASCII
+
+    # Test output.
+    c.output('XYZ', False)  # ASCII str succeeds
+    c.output(b'XYZ', False)  # ASCII bytes succeeds
+    value = 'zła'
+    value_bytes = value.encode('utf-8')
+    with pytest.warns(
+            exceptions.E24,
+            match=r'E24: Attempt to write non-ASCII value'):
+        c.output(value, False)  # non-ASCII str raises
+    with pytest.warns(
+            exceptions.E24,
+            match=r'E24: Attempt to write non-ASCII value'):
+        c.output(value_bytes, False)  # non-ASCII bytes raises
+
+
+def test_unicode_as_char_binary():
+    config = {'verify': 'exception'}
+
+    field = tree.Field(
+        None, name='unicode_in_char', datatype='char',
+        arraysize='*', config=config)
+    c = converters.get_converter(field, config=config)
+    c._binoutput_var('abc', False)  # ASCII succeeds
+    with pytest.raises(exceptions.E24, match=r"E24: Attempt to write non-ASCII value"):
+        c._binoutput_var('zła', False)
+
+    field = tree.Field(
+        None, name='unicode_in_char', datatype='char',
+        arraysize='3', config=config)
+    c = converters.get_converter(field, config=config)
+    c._binoutput_fixed('xyz', False)
+    with pytest.raises(exceptions.E24, match=r"E24: Attempt to write non-ASCII value"):
+        c._binoutput_fixed('zła', False)
 
 
 @raises(exceptions.E02)
@@ -94,8 +141,11 @@ def test_float_mask_permissive():
     field = tree.Field(
         None, name='c', datatype='float',
         config=config)
+
+    # config needs to be also passed into parse() to work.
+    # https://github.com/astropy/astropy/issues/8775
     c = converters.get_converter(field, config=config)
-    assert c.parse('null') == (c.null, True)
+    assert c.parse('null', config=config) == (c.null, True)
 
 
 @raises(exceptions.E02)
@@ -147,7 +197,7 @@ def test_complex():
         None, name='c', datatype='doubleComplex',
         config=config)
     c = converters.get_converter(field, config=config)
-    x = c.parse("1 2 3")
+    c.parse("1 2 3")
 
 
 @raises(exceptions.E04)
@@ -157,7 +207,7 @@ def test_bit():
         None, name='c', datatype='bit',
         config=config)
     c = converters.get_converter(field, config=config)
-    x = c.parse("T")
+    c.parse("T")
 
 
 def test_bit_mask():
@@ -197,7 +247,7 @@ def test_invalid_type():
     field = tree.Field(
         None, name='c', datatype='foobar',
         config=config)
-    c = converters.get_converter(field, config=config)
+    converters.get_converter(field, config=config)
 
 
 def test_precision():
@@ -270,3 +320,8 @@ def test_gemini_v1_2():
     '''
     table = parse_single_table(get_pkg_data_filename('data/gemini.xml'))
     assert table is not None
+
+    tt = table.to_table()
+    assert tt['access_url'][0] == (
+        'http://www.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/data/pub/GEMINI/'
+        'S20120515S0064?runid=bx9b1o8cvk1qesrt')

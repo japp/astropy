@@ -5,15 +5,11 @@ Some code and inspiration taken from numpy.lib.recfunctions.join_by().
 Redistribution license restrictions apply.
 """
 
-from itertools import chain
 import collections
 from collections import OrderedDict, Counter
 from collections.abc import Sequence
 
 import numpy as np
-import numpy.ma as ma
-
-from . import _np_utils
 
 __all__ = ['TableMergeError']
 
@@ -107,7 +103,7 @@ def get_descrs(arrays, col_name_map):
         # Make sure all input shapes are the same
         uniq_shapes = set(col.shape[1:] for col in in_cols)
         if len(uniq_shapes) != 1:
-            raise TableMergeError(f'Key columns {name!r} have different shape')
+            raise TableMergeError(f'Key columns have different shape')
         shape = uniq_shapes.pop()
 
         out_descrs.append((fix_column_name(out_name), dtype, shape))
@@ -171,26 +167,3 @@ def fix_column_name(val):
             raise
 
     return val
-
-
-def recarray_fromrecords(rec_list):
-    """
-    Partial replacement for `~numpy.core.records.fromrecords` which includes
-    a workaround for the bug with unicode arrays described at:
-    https://github.com/astropy/astropy/issues/3052
-
-    This should not serve as a full replacement for the original function;
-    this only does enough to fulfill the needs of the table module.
-    """
-
-    # Note: This is just copying what Numpy does for converting arbitrary rows
-    # to column arrays in the recarray module; it could be there is a better
-    # way
-    nfields = len(rec_list[0])
-    obj = np.array(rec_list, dtype=object)
-    array_list = [np.array(obj[..., i].tolist()) for i in range(nfields)]
-    formats = []
-    for obj in array_list:
-        formats.append(obj.dtype.str)
-    formats = ','.join(formats)
-    return np.rec.fromarrays(array_list, formats=formats)

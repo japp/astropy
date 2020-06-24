@@ -5,21 +5,16 @@ import numpy as np
 from numpy.testing import assert_allclose, assert_array_equal
 
 from astropy.tests.helper import assert_quantity_allclose
-from astropy.nddata.utils import (extract_array, add_array, subpixel_indices,
-                                  block_reduce, block_replicate,
-                                  overlap_slices, NoOverlapError,
-                                  PartialOverlapError, Cutout2D)
+from astropy.nddata import (extract_array, add_array, subpixel_indices,
+                            overlap_slices, NoOverlapError,
+                            PartialOverlapError, Cutout2D)
 
 from astropy.wcs import WCS, Sip
 from astropy.wcs.utils import proj_plane_pixel_area
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 
-try:
-    import skimage  # pylint: disable=W0611
-    HAS_SKIMAGE = True
-except ImportError:
-    HAS_SKIMAGE = False
+from astropy.nddata import CCDData
 
 
 test_positions = [(10.52, 3.12), (5.62, 12.97), (31.33, 31.77),
@@ -35,6 +30,8 @@ test_slices = [slice(10.52, 3.12), slice(5.62, 12.97),
 subsampling = 5
 
 test_pos_bad = [(-1, -4), (-2, 0), (6, 2), (6, 6)]
+test_nonfinite_positions = [(np.nan, np.nan), (np.inf, np.inf), (1, np.nan),
+                            (np.nan, 2), (2, -np.inf), (-np.inf, 3)]
 
 
 def test_slices_different_dim():
@@ -108,6 +105,17 @@ def test_slices_overlap_wrong_mode():
     with pytest.raises(ValueError) as e:
         overlap_slices((5,), (3,), (0,), mode='full')
     assert "Mode can be only" in str(e.value)
+
+
+@pytest.mark.parametrize('position', test_nonfinite_positions)
+def test_slices_nonfinite_position(position):
+    """
+    A ValueError should be raised if position contains a non-finite
+    value.
+    """
+
+    with pytest.raises(ValueError):
+        overlap_slices((7, 7), (3, 3), position)
 
 
 def test_extract_array_even_shape_rounding():
@@ -341,111 +349,6 @@ def test_subpixel_indices(position, subpixel_index):
     assert np.all(subpixel_indices(position, subsampling) == subpixel_index)
 
 
-@pytest.mark.skipif('not HAS_SKIMAGE')
-class TestBlockReduce:
-    def test_1d(self):
-        """Test 1D array."""
-        data = np.arange(4)
-        expected = np.array([1, 5])
-        result = block_reduce(data, 2)
-        assert np.all(result == expected)
-
-    def test_1d_mean(self):
-        """Test 1D array with func=np.mean."""
-        data = np.arange(4)
-        block_size = 2.
-        expected = block_reduce(data, block_size, func=np.sum) / block_size
-        result_mean = block_reduce(data, block_size, func=np.mean)
-        assert np.all(result_mean == expected)
-
-    def test_2d(self):
-        """Test 2D array."""
-        data = np.arange(4).reshape(2, 2)
-        expected = np.array([[6]])
-        result = block_reduce(data, 2)
-        assert np.all(result == expected)
-
-    def test_2d_mean(self):
-        """Test 2D array with func=np.mean."""
-        data = np.arange(4).reshape(2, 2)
-        block_size = 2.
-        expected = (block_reduce(data, block_size, func=np.sum) /
-                    block_size**2)
-        result = block_reduce(data, block_size, func=np.mean)
-        assert np.all(result == expected)
-
-    def test_2d_trim(self):
-        """
-        Test trimming of 2D array when size is not perfectly divisible
-        by block_size.
-        """
-
-        data1 = np.arange(15).reshape(5, 3)
-        result1 = block_reduce(data1, 2)
-        data2 = data1[0:4, 0:2]
-        result2 = block_reduce(data2, 2)
-        assert np.all(result1 == result2)
-
-    def test_block_size_broadcasting(self):
-        """Test scalar block_size broadcasting."""
-        data = np.arange(16).reshape(4, 4)
-        result1 = block_reduce(data, 2)
-        result2 = block_reduce(data, (2, 2))
-        assert np.all(result1 == result2)
-
-    def test_block_size_len(self):
-        """Test block_size length."""
-        data = np.ones((2, 2))
-        with pytest.raises(ValueError):
-            block_reduce(data, (2, 2, 2))
-
-
-@pytest.mark.skipif('not HAS_SKIMAGE')
-class TestBlockReplicate:
-    def test_1d(self):
-        """Test 1D array."""
-        data = np.arange(2)
-        expected = np.array([0, 0, 0.5, 0.5])
-        result = block_replicate(data, 2)
-        assert np.all(result == expected)
-
-    def test_1d_conserve_sum(self):
-        """Test 1D array with conserve_sum=False."""
-        data = np.arange(2)
-        block_size = 2.
-        expected = block_replicate(data, block_size) * block_size
-        result = block_replicate(data, block_size, conserve_sum=False)
-        assert np.all(result == expected)
-
-    def test_2d(self):
-        """Test 2D array."""
-        data = np.arange(2).reshape(2, 1)
-        expected = np.array([[0, 0], [0, 0], [0.25, 0.25], [0.25, 0.25]])
-        result = block_replicate(data, 2)
-        assert np.all(result == expected)
-
-    def test_2d_conserve_sum(self):
-        """Test 2D array with conserve_sum=False."""
-        data = np.arange(6).reshape(2, 3)
-        block_size = 2.
-        expected = block_replicate(data, block_size) * block_size**2
-        result = block_replicate(data, block_size, conserve_sum=False)
-        assert np.all(result == expected)
-
-    def test_block_size_broadcasting(self):
-        """Test scalar block_size broadcasting."""
-        data = np.arange(4).reshape(2, 2)
-        result1 = block_replicate(data, 2)
-        result2 = block_replicate(data, (2, 2))
-        assert np.all(result1 == result2)
-
-    def test_block_size_len(self):
-        """Test block_size length."""
-        data = np.arange(5)
-        with pytest.raises(ValueError):
-            block_replicate(data, (2, 2))
-
-
 class TestCutout2D:
     def setup_class(self):
         self.data = np.arange(20.).reshape(5, 4)
@@ -621,3 +524,17 @@ class TestCutout2D:
             w.all_pix2world(*w.wcs.crpix, 1), w.wcs.crval,
             rtol=0.0, atol=1e-6 * pscale
         )
+
+    def test_cutout_with_nddata_as_input(self):
+        # This is essentially a copy/paste of test_skycoord with the
+        # input a ccd with wcs attribute instead of passing the
+        # wcs separately.
+        ccd = CCDData(data=self.data, wcs=self.wcs, unit='adu')
+        c = Cutout2D(ccd, self.position, (3, 3))
+        skycoord_original = self.position.from_pixel(c.center_original[1],
+                                                     c.center_original[0],
+                                                     self.wcs)
+        skycoord_cutout = self.position.from_pixel(c.center_cutout[1],
+                                                   c.center_cutout[0], c.wcs)
+        assert_quantity_allclose(skycoord_original.ra, skycoord_cutout.ra)
+        assert_quantity_allclose(skycoord_original.dec, skycoord_cutout.dec)

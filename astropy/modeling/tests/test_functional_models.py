@@ -1,6 +1,6 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
-
+# pylint: disable=invalid-name
 import pytest
 import numpy as np
 from numpy.testing import assert_allclose, assert_array_equal, assert_array_less
@@ -8,11 +8,10 @@ from numpy.testing import assert_allclose, assert_array_equal, assert_array_less
 from astropy.modeling import models, InputParameterError
 from astropy.coordinates import Angle
 from astropy.modeling import fitting
-from astropy.tests.helper import catch_warnings
-from astropy.utils.exceptions import AstropyDeprecationWarning
+from astropy.utils.exceptions import AstropyDeprecationWarning, AstropyUserWarning
 
 try:
-    from scipy import optimize  # pylint: disable=W0611
+    from scipy import optimize  # pylint: disable=W0611  # noqa
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
@@ -205,7 +204,9 @@ def test_Shift_model_levmar_fit():
     y = x+0.1
 
     fitter = fitting.LevMarLSQFitter()
-    fitted_model = fitter(init_model, x, y)
+    with pytest.warns(AstropyUserWarning,
+                      match='Model is linear in parameters'):
+        fitted_model = fitter(init_model, x, y)
 
     assert_allclose(fitted_model.parameters, [0.1], atol=1e-15)
 
@@ -265,3 +266,24 @@ def test_KingProjectedAnalytic1D_fit():
     fitter = fitting.LevMarLSQFitter()
     km_fit = fitter(km_init, xarr, yarr)
     assert_allclose(km_fit.param_sets, km.param_sets)
+
+
+def test_ExponentialAndLogarithmic1D_fit():
+    xarr = np.linspace(0.1, 10., 200)
+    em_model = models.Exponential1D(amplitude=1, tau=1)
+    log_model = models.Logarithmic1D(amplitude=1, tau=1)
+    assert_allclose(xarr, em_model.inverse(em_model(xarr)))
+    assert_allclose(xarr, log_model.inverse(log_model(xarr)))
+
+
+def test_deprecated_hat_kernel():
+
+    # 'MexicanHat' was deprecated as a name for the models which are now
+    # 'RickerWavelet'. This test ensures that the models are correctly
+    # deprecated.
+
+    with pytest.warns(AstropyDeprecationWarning):
+        models.MexicanHat1D()
+
+    with pytest.warns(AstropyDeprecationWarning):
+        models.MexicanHat2D()

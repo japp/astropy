@@ -3,7 +3,6 @@
 import glob
 import io
 import os
-import platform
 import sys
 import copy
 import subprocess
@@ -11,7 +10,7 @@ import subprocess
 import pytest
 import numpy as np
 
-from astropy.io.fits.verify import VerifyError
+from astropy.io.fits.verify import VerifyError, VerifyWarning
 from astropy.io import fits
 from astropy.tests.helper import raises, catch_warnings, ignore_warnings
 from astropy.utils.exceptions import AstropyUserWarning, AstropyDeprecationWarning
@@ -457,13 +456,13 @@ class TestHDUListFunctions(FitsTestCase):
         """Test flushing changes to a file opened in a read only mode."""
 
         oldmtime = os.stat(self.data('test0.fits')).st_mtime
-        hdul = fits.open(self.data('test0.fits'))
-        hdul[0].header['FOO'] = 'BAR'
-        with catch_warnings(AstropyUserWarning) as w:
-            hdul.flush()
-        assert len(w) == 1
-        assert 'mode is not supported' in str(w[0].message)
-        assert oldmtime == os.stat(self.data('test0.fits')).st_mtime
+        with fits.open(self.data('test0.fits')) as hdul:
+            hdul[0].header['FOO'] = 'BAR'
+            with catch_warnings(AstropyUserWarning) as w:
+                hdul.flush()
+            assert len(w) == 1
+            assert 'mode is not supported' in str(w[0].message)
+            assert oldmtime == os.stat(self.data('test0.fits')).st_mtime
 
     def test_fix_extend_keyword(self):
         hdul = fits.HDUList()
@@ -620,8 +619,6 @@ class TestHDUListFunctions(FitsTestCase):
         with fits.open(self.temp('temp.fits')) as hdul:
             assert (hdul[0].data == data).all()
 
-    @pytest.mark.xfail(platform.system() == 'Windows',
-                       reason='https://github.com/astropy/astropy/issues/5797')
     def test_update_resized_header(self):
         """
         Test saving updates to a file where the header is one block smaller
@@ -1055,3 +1052,27 @@ class TestHDUListFunctions(FitsTestCase):
             with subprocess.Popen(["cat"], stdin=subprocess.PIPE,
                                   stdout=fout) as p:
                 hdulist.writeto(p.stdin)
+
+    def test_output_verify(self):
+        hdul = fits.HDUList([fits.PrimaryHDU()])
+        hdul[0].header['FOOBAR'] = 42
+        hdul.writeto(self.temp('test.fits'))
+
+        with open(self.temp('test.fits'), 'rb') as f:
+            data = f.read()
+        # create invalid card
+        data = data.replace(b'FOOBAR  =', b'FOOBAR = ')
+        with open(self.temp('test2.fits'), 'wb') as f:
+            f.write(data)
+
+        with pytest.raises(VerifyError):
+            with fits.open(self.temp('test2.fits'), mode='update') as hdul:
+                hdul[0].header['MORE'] = 'here'
+
+        with pytest.warns(VerifyWarning) as ww:
+            with fits.open(self.temp('test2.fits'), mode='update',
+                           output_verify='fix+warn') as hdul:
+                hdul[0].header['MORE'] = 'here'
+        assert len(ww) == 6
+        msg = "Card 'FOOBAR ' is not FITS standard (equal sign not at column 8)"
+        assert msg in str(ww[3].message)

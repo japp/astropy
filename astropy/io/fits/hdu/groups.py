@@ -3,7 +3,7 @@
 import sys
 import numpy as np
 
-from .base import DTYPE2BITPIX
+from .base import DTYPE2BITPIX, DELAYED
 from .image import PrimaryHDU
 from .table import _TableLikeHDU
 from astropy.io.fits.column import Column, ColDefs, FITS2NUMPY
@@ -268,6 +268,8 @@ class GroupsHDU(PrimaryHDU, _TableLikeHDU):
 
     def __init__(self, data=None, header=None):
         super().__init__(data=data, header=header)
+        if data is not DELAYED:
+            self.update_header()
 
         # Update the axes; GROUPS HDUs should always have at least one axis
         if len(self._axes) <= 0:
@@ -287,6 +289,9 @@ class GroupsHDU(PrimaryHDU, _TableLikeHDU):
         The data of a random group FITS file will be like a binary table's
         data.
         """
+
+        if self._axes == [0]:
+            return
 
         data = self._get_tbdata()
         data._coldefs = self.columns
@@ -479,21 +484,19 @@ class GroupsHDU(PrimaryHDU, _TableLikeHDU):
                 byteorder = self.data.dtype.fields[fname][0].str[0]
                 should_swap = (byteorder in swap_types)
 
-            if not fileobj.simulateonly:
-
-                if should_swap:
-                    if output.flags.writeable:
+            if should_swap:
+                if output.flags.writeable:
+                    output.byteswap(True)
+                    try:
+                        fileobj.writearray(output)
+                    finally:
                         output.byteswap(True)
-                        try:
-                            fileobj.writearray(output)
-                        finally:
-                            output.byteswap(True)
-                    else:
-                        # For read-only arrays, there is no way around making
-                        # a byteswapped copy of the data.
-                        fileobj.writearray(output.byteswap(False))
                 else:
-                    fileobj.writearray(output)
+                    # For read-only arrays, there is no way around making
+                    # a byteswapped copy of the data.
+                    fileobj.writearray(output.byteswap(False))
+            else:
+                fileobj.writearray(output)
 
             size += output.size * output.itemsize
         return size

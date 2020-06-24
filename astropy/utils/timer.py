@@ -18,8 +18,8 @@ from astropy import modeling
 from astropy.utils.decorators import deprecated
 from astropy.utils.exceptions import AstropyUserWarning
 
-__all__ = ['timefunc', 'RunTimePredictor']
-__doctest_skip__ = ['timefunc']
+__all__ = []
+__doctest_skip__ = ['*']
 
 
 @deprecated('4.0', alternative='astroquery.utils.timer.timefunc')
@@ -100,14 +100,10 @@ class RunTimePredictor:
 
     Examples
     --------
-    >>> import warnings
-
     Set up a predictor for :math:`10^{x}`:
 
-    >>> with warnings.catch_warnings():
-    ...     warnings.simplefilter('ignore')  # Ignore deprecation warning
-    ...     from astropy.utils.timer import RunTimePredictor
-    ...     p = RunTimePredictor(pow, 10)
+    >>> from astropy.utils.timer import RunTimePredictor  # doctest: +IGNORE_WARNINGS
+    >>> p = RunTimePredictor(pow, 10)  # doctest: +IGNORE_WARNINGS
 
     Give it baseline data to use for prediction and
     get the function output values:
@@ -242,7 +238,7 @@ class RunTimePredictor:
 
         Returns
         -------
-        a : array-like
+        a : array_like
             Fitted `~astropy.modeling.FittableModel` parameters.
 
         Raises
@@ -313,7 +309,7 @@ class RunTimePredictor:
              save_as=''):  # pragma: no cover
         """Plot prediction.
 
-        .. note:: Uses `matplotlib <http://matplotlib.org/>`_.
+        .. note:: Uses `matplotlib <https://matplotlib.org/>`_.
 
         Parameters
         ----------

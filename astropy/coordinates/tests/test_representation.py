@@ -6,38 +6,67 @@ from collections import OrderedDict
 
 import pytest
 import numpy as np
-from numpy.testing import assert_allclose
+from numpy.testing import assert_allclose, assert_array_equal
 
 from astropy import units as u
 from astropy.tests.helper import (assert_quantity_allclose as
-                             assert_allclose_quantity, catch_warnings)
+                                  assert_allclose_quantity)
 from astropy.utils import isiterable
-from astropy.utils.compat import NUMPY_LT_1_14
+from astropy.utils.exceptions import DuplicateRepresentationWarning
 from astropy.coordinates.angles import Longitude, Latitude, Angle
 from astropy.coordinates.distances import Distance
 from astropy.coordinates.representation import (REPRESENTATION_CLASSES,
-                              DIFFERENTIAL_CLASSES,
-                              BaseRepresentation,
-                              SphericalRepresentation,
-                              UnitSphericalRepresentation,
-                              SphericalCosLatDifferential,
-                              CartesianRepresentation,
-                              CylindricalRepresentation,
-                              PhysicsSphericalRepresentation,
-                              CartesianDifferential,
-                              SphericalDifferential,
-                              _combine_xyz)
+                                                DIFFERENTIAL_CLASSES,
+                                                DUPLICATE_REPRESENTATIONS,
+                                                BaseRepresentation,
+                                                SphericalRepresentation,
+                                                UnitSphericalRepresentation,
+                                                SphericalCosLatDifferential,
+                                                CartesianRepresentation,
+                                                CylindricalRepresentation,
+                                                PhysicsSphericalRepresentation,
+                                                CartesianDifferential,
+                                                SphericalDifferential,
+                                                RadialDifferential,
+                                                _combine_xyz)
 
 
 # Preserve the original REPRESENTATION_CLASSES dict so that importing
 #   the test file doesn't add a persistent test subclass (LogDRepresentation)
 def setup_function(func):
     func.REPRESENTATION_CLASSES_ORIG = deepcopy(REPRESENTATION_CLASSES)
+    func.DUPLICATE_REPRESENTATIONS_ORIG = deepcopy(DUPLICATE_REPRESENTATIONS)
 
 
 def teardown_function(func):
     REPRESENTATION_CLASSES.clear()
     REPRESENTATION_CLASSES.update(func.REPRESENTATION_CLASSES_ORIG)
+    DUPLICATE_REPRESENTATIONS.clear()
+    DUPLICATE_REPRESENTATIONS.update(func.DUPLICATE_REPRESENTATIONS_ORIG)
+
+
+def components_equal(rep1, rep2):
+    result = True
+    if type(rep1) is not type(rep2):
+        return False
+    for component in rep1.components:
+        result &= getattr(rep1, component) == getattr(rep2, component)
+    return result
+
+
+def representation_equal(rep1, rep2):
+    result = True
+    if type(rep1) is not type(rep2):
+        return False
+    if getattr(rep1, '_differentials', False):
+        if rep1._differentials.keys() != rep2._differentials.keys():
+            return False
+        for key, diff1 in rep1._differentials.items():
+            result &= components_equal(diff1, rep2._differentials[key])
+    elif getattr(rep2, '_differentials', False):
+        return False
+
+    return result & components_equal(rep1, rep2)
 
 
 class TestSphericalRepresentation:
@@ -133,6 +162,10 @@ class TestSphericalRepresentation:
         assert_allclose_quantity(s2.lat, 5. * u.deg)
         assert_allclose_quantity(s2.distance, 10 * u.kpc)
 
+        s3 = SphericalRepresentation(s1)
+
+        assert representation_equal(s1, s3)
+
     def test_broadcasting(self):
 
         s1 = SphericalRepresentation(lon=[8, 9] * u.hourangle,
@@ -193,6 +226,16 @@ class TestSphericalRepresentation:
             len(s)
         assert not isiterable(s)
 
+    def test_setitem(self):
+        s = SphericalRepresentation(lon=np.arange(5) * u.deg,
+                                    lat=-np.arange(5) * u.deg,
+                                    distance=1 * u.kpc)
+        s[:2] = SphericalRepresentation(lon=10.*u.deg, lat=2.*u.deg,
+                                        distance=5.*u.kpc)
+        assert_allclose_quantity(s.lon, [10, 10, 2, 3, 4] * u.deg)
+        assert_allclose_quantity(s.lat, [2, 2, -2, -3, -4] * u.deg)
+        assert_allclose_quantity(s.distance, [5, 5, 1, 1, 1] * u.kpc)
+
     def test_nan_distance(self):
         """ This is a regression test: calling represent_as() and passing in the
             same class as the object shouldn't round-trip through cartesian.
@@ -209,6 +252,13 @@ class TestSphericalRepresentation:
         new_sph = sph.represent_as(SphericalRepresentation)
         assert_allclose_quantity(new_sph.lon, sph.lon)
         assert_allclose_quantity(new_sph.lat, sph.lat)
+
+    def test_raise_on_extra_arguments(self):
+        with pytest.raises(TypeError, match='got multiple values'):
+            SphericalRepresentation(1*u.deg, 2*u.deg, 1.*u.kpc, lat=10)
+
+        with pytest.raises(TypeError, match='unexpected keyword.*parrot'):
+            SphericalRepresentation(1*u.deg, 2*u.deg, 1.*u.kpc, parrot=10)
 
 
 class TestUnitSphericalRepresentation:
@@ -273,6 +323,10 @@ class TestUnitSphericalRepresentation:
 
         assert_allclose_quantity(s2.lon, 8. * u.hourangle)
         assert_allclose_quantity(s2.lat, 5. * u.deg)
+
+        s3 = UnitSphericalRepresentation(s1)
+
+        assert representation_equal(s3, s1)
 
     def test_broadcasting(self):
 
@@ -393,6 +447,10 @@ class TestPhysicsSphericalRepresentation:
         assert_allclose_quantity(s2.phi, 8. * u.hourangle)
         assert_allclose_quantity(s2.theta, 5. * u.deg)
         assert_allclose_quantity(s2.r, 10 * u.kpc)
+
+        s3 = PhysicsSphericalRepresentation(s1)
+
+        assert representation_equal(s3, s1)
 
     def test_broadcasting(self):
 
@@ -593,6 +651,10 @@ class TestCartesianRepresentation:
         assert s2.y == 2 * u.kpc
         assert s2.z == 3 * u.kpc
 
+        s3 = CartesianRepresentation(s1)
+
+        assert representation_equal(s3, s1)
+
     def test_broadcasting(self):
 
         s1 = CartesianRepresentation(x=[1, 2] * u.kpc, y=[3, 4] * u.kpc, z=5 * u.kpc)
@@ -759,6 +821,10 @@ class TestCylindricalRepresentation:
         assert s2.phi == 2 * u.deg
         assert s2.z == 3 * u.kpc
 
+        s3 = CylindricalRepresentation(s1)
+
+        assert representation_equal(s3, s1)
+
     def test_broadcasting(self):
 
         s1 = CylindricalRepresentation(rho=[1, 2] * u.kpc, phi=[3, 4] * u.deg, z=5 * u.kpc)
@@ -846,6 +912,20 @@ def test_cartesian_spherical_roundtrip():
     assert_allclose_quantity(s2.lon, s4.lon)
     assert_allclose_quantity(s2.lat, s4.lat)
     assert_allclose_quantity(s2.distance, s4.distance)
+
+
+def test_cartesian_setting_with_other():
+
+    s1 = CartesianRepresentation(x=[1, 2000.] * u.kpc,
+                                 y=[3000., 4.] * u.pc,
+                                 z=[5., 6000.] * u.pc)
+    s1[0] = SphericalRepresentation(0.*u.deg, 0.*u.deg, 1*u.kpc)
+    assert_allclose_quantity(s1.x, [1., 2000.] * u.kpc)
+    assert_allclose_quantity(s1.y, [0., 4.] * u.pc)
+    assert_allclose_quantity(s1.z, [0., 6000.] * u.pc)
+
+    with pytest.raises(ValueError, match='loss of information'):
+        s1[1] = UnitSphericalRepresentation(0.*u.deg, 10.*u.deg)
 
 
 def test_cartesian_physics_spherical_roundtrip():
@@ -947,93 +1027,58 @@ def test_no_unnecessary_copies():
 def test_representation_repr():
     r1 = SphericalRepresentation(lon=1 * u.deg, lat=2.5 * u.deg, distance=1 * u.kpc)
     assert repr(r1) == ('<SphericalRepresentation (lon, lat, distance) in (deg, deg, kpc)\n'
-                        '    ({})>').format(' 1.,  2.5,  1.' if NUMPY_LT_1_14
-                                            else '1., 2.5, 1.')
+                        '    (1., 2.5, 1.)>')
 
     r2 = CartesianRepresentation(x=1 * u.kpc, y=2 * u.kpc, z=3 * u.kpc)
     assert repr(r2) == ('<CartesianRepresentation (x, y, z) in kpc\n'
-                        '    ({})>').format(' 1.,  2.,  3.' if NUMPY_LT_1_14
-                                            else '1., 2., 3.')
+                        '    (1., 2., 3.)>')
 
     r3 = CartesianRepresentation(x=[1, 2, 3] * u.kpc, y=4 * u.kpc, z=[9, 10, 11] * u.kpc)
-    if NUMPY_LT_1_14:
-        assert repr(r3) == ('<CartesianRepresentation (x, y, z) in kpc\n'
-                            '    [( 1.,  4.,   9.), ( 2.,  4.,  10.), ( 3.,  4.,  11.)]>')
-    else:
-        assert repr(r3) == ('<CartesianRepresentation (x, y, z) in kpc\n'
-                            '    [(1., 4.,  9.), (2., 4., 10.), (3., 4., 11.)]>')
+    assert repr(r3) == ('<CartesianRepresentation (x, y, z) in kpc\n'
+                        '    [(1., 4.,  9.), (2., 4., 10.), (3., 4., 11.)]>')
 
 
 def test_representation_repr_multi_d():
     """Regression test for #5889."""
     cr = CartesianRepresentation(np.arange(27).reshape(3, 3, 3), unit='m')
-    if NUMPY_LT_1_14:
-        assert repr(cr) == (
-            '<CartesianRepresentation (x, y, z) in m\n'
-            '    [[( 0.,   9.,  18.), ( 1.,  10.,  19.), ( 2.,  11.,  20.)],\n'
-            '     [( 3.,  12.,  21.), ( 4.,  13.,  22.), ( 5.,  14.,  23.)],\n'
-            '     [( 6.,  15.,  24.), ( 7.,  16.,  25.), ( 8.,  17.,  26.)]]>')
-    else:
-        assert repr(cr) == (
-            '<CartesianRepresentation (x, y, z) in m\n'
-            '    [[(0.,  9., 18.), (1., 10., 19.), (2., 11., 20.)],\n'
-            '     [(3., 12., 21.), (4., 13., 22.), (5., 14., 23.)],\n'
-            '     [(6., 15., 24.), (7., 16., 25.), (8., 17., 26.)]]>')
+    assert repr(cr) == (
+        '<CartesianRepresentation (x, y, z) in m\n'
+        '    [[(0.,  9., 18.), (1., 10., 19.), (2., 11., 20.)],\n'
+        '     [(3., 12., 21.), (4., 13., 22.), (5., 14., 23.)],\n'
+        '     [(6., 15., 24.), (7., 16., 25.), (8., 17., 26.)]]>')
     # This was broken before.
-    if NUMPY_LT_1_14:
-        assert repr(cr.T) == (
-            '<CartesianRepresentation (x, y, z) in m\n'
-            '    [[( 0.,   9.,  18.), ( 3.,  12.,  21.), ( 6.,  15.,  24.)],\n'
-            '     [( 1.,  10.,  19.), ( 4.,  13.,  22.), ( 7.,  16.,  25.)],\n'
-            '     [( 2.,  11.,  20.), ( 5.,  14.,  23.), ( 8.,  17.,  26.)]]>')
-    else:
-        assert repr(cr.T) == (
-            '<CartesianRepresentation (x, y, z) in m\n'
-            '    [[(0.,  9., 18.), (3., 12., 21.), (6., 15., 24.)],\n'
-            '     [(1., 10., 19.), (4., 13., 22.), (7., 16., 25.)],\n'
-            '     [(2., 11., 20.), (5., 14., 23.), (8., 17., 26.)]]>')
+    assert repr(cr.T) == (
+        '<CartesianRepresentation (x, y, z) in m\n'
+        '    [[(0.,  9., 18.), (3., 12., 21.), (6., 15., 24.)],\n'
+        '     [(1., 10., 19.), (4., 13., 22.), (7., 16., 25.)],\n'
+        '     [(2., 11., 20.), (5., 14., 23.), (8., 17., 26.)]]>')
 
 
 def test_representation_str():
     r1 = SphericalRepresentation(lon=1 * u.deg, lat=2.5 * u.deg, distance=1 * u.kpc)
-    assert str(r1) == ('( 1.,  2.5,  1.) (deg, deg, kpc)' if NUMPY_LT_1_14 else
-                       '(1., 2.5, 1.) (deg, deg, kpc)')
+    assert str(r1) == '(1., 2.5, 1.) (deg, deg, kpc)'
+
     r2 = CartesianRepresentation(x=1 * u.kpc, y=2 * u.kpc, z=3 * u.kpc)
-    assert str(r2) == ('( 1.,  2.,  3.) kpc' if NUMPY_LT_1_14 else
-                       '(1., 2., 3.) kpc')
+    assert str(r2) == '(1., 2., 3.) kpc'
+
     r3 = CartesianRepresentation(x=[1, 2, 3] * u.kpc, y=4 * u.kpc, z=[9, 10, 11] * u.kpc)
-    assert str(r3) == ('[( 1.,  4.,   9.), ( 2.,  4.,  10.), ( 3.,  4.,  11.)] kpc'
-                       if NUMPY_LT_1_14 else
-                       '[(1., 4.,  9.), (2., 4., 10.), (3., 4., 11.)] kpc')
+    assert str(r3) == '[(1., 4.,  9.), (2., 4., 10.), (3., 4., 11.)] kpc'
 
 
 def test_representation_str_multi_d():
     """Regression test for #5889."""
     cr = CartesianRepresentation(np.arange(27).reshape(3, 3, 3), unit='m')
-    if NUMPY_LT_1_14:
-        assert str(cr) == (
-            '[[( 0.,   9.,  18.), ( 1.,  10.,  19.), ( 2.,  11.,  20.)],\n'
-            ' [( 3.,  12.,  21.), ( 4.,  13.,  22.), ( 5.,  14.,  23.)],\n'
-            ' [( 6.,  15.,  24.), ( 7.,  16.,  25.), ( 8.,  17.,  26.)]] m')
-    else:
-        assert str(cr) == (
-            '[[(0.,  9., 18.), (1., 10., 19.), (2., 11., 20.)],\n'
-            ' [(3., 12., 21.), (4., 13., 22.), (5., 14., 23.)],\n'
-            ' [(6., 15., 24.), (7., 16., 25.), (8., 17., 26.)]] m')
+    assert str(cr) == (
+        '[[(0.,  9., 18.), (1., 10., 19.), (2., 11., 20.)],\n'
+        ' [(3., 12., 21.), (4., 13., 22.), (5., 14., 23.)],\n'
+        ' [(6., 15., 24.), (7., 16., 25.), (8., 17., 26.)]] m')
     # This was broken before.
-    if NUMPY_LT_1_14:
-        assert str(cr.T) == (
-            '[[( 0.,   9.,  18.), ( 3.,  12.,  21.), ( 6.,  15.,  24.)],\n'
-            ' [( 1.,  10.,  19.), ( 4.,  13.,  22.), ( 7.,  16.,  25.)],\n'
-            ' [( 2.,  11.,  20.), ( 5.,  14.,  23.), ( 8.,  17.,  26.)]] m')
-    else:
-        assert str(cr.T) == (
-            '[[(0.,  9., 18.), (3., 12., 21.), (6., 15., 24.)],\n'
-            ' [(1., 10., 19.), (4., 13., 22.), (7., 16., 25.)],\n'
-            ' [(2., 11., 20.), (5., 14., 23.), (8., 17., 26.)]] m')
+    assert str(cr.T) == (
+        '[[(0.,  9., 18.), (3., 12., 21.), (6., 15., 24.)],\n'
+        ' [(1., 10., 19.), (4., 13., 22.), (7., 16., 25.)],\n'
+        ' [(2., 11., 20.), (5., 14., 23.), (8., 17., 26.)]] m')
 
 
-@pytest.mark.remote_data
 def test_subclass_representation():
     from astropy.coordinates.builtin_frames import ICRS
 
@@ -1109,12 +1154,28 @@ def test_minimal_subclass():
     with pytest.raises(TypeError):
         LogDRepresentation(0.*u.deg, 1.*u.deg, 1.*u.dex(u.kpc), foo='bar')
 
+    # if we define it a second time, even the qualnames are the same,
+    # so we raise
     with pytest.raises(ValueError):
-        # check we cannot redefine an existing class.
         class LogDRepresentation(BaseRepresentation):
             attr_classes = OrderedDict([('lon', Longitude),
                                         ('lat', Latitude),
                                         ('logr', u.Dex)])
+
+
+def test_duplicate_warning():
+    from astropy.coordinates.representation import DUPLICATE_REPRESENTATIONS
+    from astropy.coordinates.representation import REPRESENTATION_CLASSES
+
+    with pytest.warns(DuplicateRepresentationWarning):
+        class UnitSphericalRepresentation(BaseRepresentation):
+            attr_classes = OrderedDict([('lon', Longitude),
+                                        ('lat', Latitude)])
+
+    assert 'unitspherical' in DUPLICATE_REPRESENTATIONS
+    assert 'unitspherical' not in REPRESENTATION_CLASSES
+    assert 'astropy.coordinates.representation.UnitSphericalRepresentation' in REPRESENTATION_CLASSES
+    assert __name__ + '.test_duplicate_warning.<locals>.UnitSphericalRepresentation' in REPRESENTATION_CLASSES
 
 
 def test_combine_xyz():
@@ -1184,6 +1245,13 @@ class TestCartesianRepresentationWithDifferential:
         with pytest.raises(TypeError):  # invalid type passed to differentials
             CartesianRepresentation(x=1 * u.kpc, y=2 * u.kpc, z=3 * u.kpc,
                                     differentials='garmonbozia')
+
+        # And that one can add it to another representation.
+        s1 = CartesianRepresentation(
+            CartesianRepresentation(x=1 * u.kpc, y=2 * u.kpc, z=3 * u.kpc),
+            differentials=diff)
+        assert len(s1.differentials) == 1
+        assert s1.differentials['s'] is diff
 
         # make sure differentials can't accept differentials
         with pytest.raises(TypeError):
@@ -1258,6 +1326,10 @@ class TestCartesianRepresentationWithDifferential:
         assert r2.get_name() == 'cartesian'
         assert not r2.differentials
 
+        r3 = SphericalRepresentation(r1)
+        assert r3.differentials
+        assert representation_equal(r3, r1)
+
     def test_readonly(self):
 
         s1 = CartesianRepresentation(x=1 * u.kpc, y=2 * u.kpc, z=3 * u.kpc)
@@ -1326,6 +1398,51 @@ class TestCartesianRepresentationWithDifferential:
         assert_allclose_quantity(s_dif.d_x, [2, 4, 6] * u.m/u.s)
         assert_allclose_quantity(s_dif.d_y, [-2, -4, -6] * u.m/u.s)
         assert_allclose_quantity(s_dif.d_z, [1, 1, 1] * u.m/u.s)
+
+    def test_setitem(self):
+        d = CartesianDifferential(d_x=np.arange(5) * u.m/u.s,
+                                  d_y=-np.arange(5) * u.m/u.s,
+                                  d_z=1. * u.m/u.s)
+        s = CartesianRepresentation(x=np.arange(5) * u.m,
+                                    y=-np.arange(5) * u.m,
+                                    z=3 * u.km,
+                                    differentials=d)
+        s[:2] = s[2]
+        assert_array_equal(s.x, [2, 2, 2, 3, 4] * u.m)
+        assert_array_equal(s.y, [-2, -2, -2, -3, -4] * u.m)
+        assert_array_equal(s.z, [3, 3, 3, 3, 3] * u.km)
+        assert_array_equal(s.differentials['s'].d_x,
+                           [2, 2, 2, 3, 4] * u.m/u.s)
+        assert_array_equal(s.differentials['s'].d_y,
+                           [-2, -2, -2, -3, -4] * u.m/u.s)
+        assert_array_equal(s.differentials['s'].d_z,
+                           [1, 1, 1, 1, 1] * u.m/u.s)
+
+        s2 = s.represent_as(SphericalRepresentation,
+                            SphericalDifferential)
+
+        s[0] = s2[3]
+        assert_allclose_quantity(s.x, [3, 2, 2, 3, 4] * u.m)
+        assert_allclose_quantity(s.y, [-3, -2, -2, -3, -4] * u.m)
+        assert_allclose_quantity(s.z, [3, 3, 3, 3, 3] * u.km)
+        assert_allclose_quantity(s.differentials['s'].d_x,
+                                 [3, 2, 2, 3, 4] * u.m/u.s)
+        assert_allclose_quantity(s.differentials['s'].d_y,
+                                 [-3, -2, -2, -3, -4] * u.m/u.s)
+        assert_allclose_quantity(s.differentials['s'].d_z,
+                                 [1, 1, 1, 1, 1] * u.m/u.s)
+
+        s3 = CartesianRepresentation(s.xyz, differentials={
+            's': d,
+            's2': CartesianDifferential(np.ones((3, 5))*u.m/u.s**2)})
+        with pytest.raises(ValueError, match='same differentials'):
+            s[0] = s3[2]
+
+        s4 = SphericalRepresentation(0.*u.deg, 0.*u.deg, 1.*u.kpc,
+                                     differentials=RadialDifferential(
+                                         10*u.km/u.s))
+        with pytest.raises(ValueError, match='loss of information'):
+            s[0] = s4
 
     def test_transform(self):
         d1 = CartesianDifferential(d_x=[1, 2] * u.km/u.s,
@@ -1410,8 +1527,8 @@ def unitphysics():
         attr_classes = OrderedDict([('phi', Angle),
                                     ('theta', Angle)])
 
-        def __init__(self, phi, theta, differentials=None, copy=True):
-            super().__init__(phi, theta, copy=copy, differentials=differentials)
+        def __init__(self, *args, copy=True, **kwargs):
+            super().__init__(*args, copy=copy, **kwargs)
 
             # Wrap/validate phi/theta
             if copy:
@@ -1423,7 +1540,7 @@ def unitphysics():
             if np.any(self._theta < 0.*u.deg) or np.any(self._theta > 180.*u.deg):
                 raise ValueError('Inclination angle(s) must be within '
                                  '0 deg <= angle <= 180 deg, '
-                                 'got {}'.format(theta.to(u.degree)))
+                                 'got {}'.format(self._theta.to(u.degree)))
 
         @property
         def phi(self):
@@ -1500,6 +1617,12 @@ def test_unitphysics(unitphysics):
     assert assph.lat == 80*u.deg
     assert_allclose_quantity(assph.distance, 1*u.dimensionless_unscaled)
 
+    with pytest.raises(TypeError, match='got multiple values'):
+        unitphysics(1*u.deg, 2*u.deg, theta=10)
+
+    with pytest.raises(TypeError, match='unexpected keyword.*parrot'):
+        unitphysics(1*u.deg, 2*u.deg, parrot=10)
+
 
 def test_distance_warning(recwarn):
     SphericalRepresentation(1*u.deg, 2*u.deg, 1*u.kpc)
@@ -1519,3 +1642,26 @@ def test_dtype_preservation_in_indexing():
     cr0 = cr[0]
     # This used to fail.
     assert cr0.xyz.dtype == xyz.dtype
+
+
+class TestInfo:
+    def setup_class(cls):
+        cls.rep = SphericalRepresentation([0, 1]*u.deg, [2, 3]*u.deg,
+                                          10*u.pc)
+        cls.diff = SphericalDifferential([10, 20]*u.mas/u.yr,
+                                         [30, 40]*u.mas/u.yr,
+                                         [50, 60]*u.km/u.s)
+        cls.rep_w_diff = SphericalRepresentation(cls.rep,
+                                                 differentials=cls.diff)
+
+    def test_info_unit(self):
+        assert self.rep.info.unit == 'deg, deg, pc'
+        assert self.diff.info.unit == 'mas / yr, mas / yr, km / s'
+        assert self.rep_w_diff.info.unit == 'deg, deg, pc'
+
+    @pytest.mark.parametrize('item', ['rep', 'diff', 'rep_w_diff'])
+    def test_roundtrip(self, item):
+        rep_or_diff = getattr(self, item)
+        as_dict = rep_or_diff.info._represent_as_dict()
+        new = rep_or_diff.__class__.info._construct_from_dict(as_dict)
+        assert np.all(representation_equal(new, rep_or_diff))

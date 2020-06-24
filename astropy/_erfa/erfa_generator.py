@@ -13,17 +13,6 @@ or dtypes for those structs.  They should be added manually in the template file
 import re
 import os.path
 from collections import OrderedDict
-from distutils.version import LooseVersion
-
-import numpy
-
-# Note: once we support only numpy >=1.16, all things related to "d3_fix"
-# can be removed, here and in the templates (core.py.templ
-
-# NOTE: we define this variable here instead of importing from astropy to
-# ensure that running this script does not require importing astropy.
-NUMPY_LT_1_16 = LooseVersion(numpy.__version__) < '1.16'
-
 
 DEFAULT_ERFA_LOC = os.path.join(os.path.split(__file__)[0],
                                 '../../cextern/erfa')
@@ -84,7 +73,7 @@ class FunctionDoc:
     def input(self):
         if self.__input is None:
             self.__input = []
-            for regex in ("Given([^\n]*):\n(.+?)  \n",
+            for regex in ("Given([^\n]*):.*?\n(.+?)  \n",
                           "Given and returned([^\n]*):\n(.+?)  \n"):
                 result = re.search(regex, self.doc, re.DOTALL)
                 if result is not None:
@@ -98,7 +87,7 @@ class FunctionDoc:
         if self.__output is None:
             self.__output = []
             for regex in ("Given and returned([^\n]*):\n(.+?)  \n",
-                          "Returned([^\n]*):\n(.+?)  \n"):
+                          "Returned([^\n]*):.*?\n(.+?)  \n"):
                 result = re.search(regex, self.doc, re.DOTALL)
                 if result is not None:
                     doc_lines = result.group(2).split("\n")
@@ -133,6 +122,8 @@ class ArgumentDoc:
         match = re.search("^ +([^ ]+)[ ]+([^ ]+)[ ]+(.+)", doc)
         if match is not None:
             self.name = match.group(1)
+            if self.name.startswith('*'):  # easier than getting the regex to behave...
+                self.name = self.name.replace('*', '')
             self.type = match.group(2)
             self.doc = match.group(3)
         else:
@@ -231,9 +222,9 @@ class Variable:
         if self.ctype == 'eraLDBODY':
             return '(n)'
         elif self.ctype == 'double' and self.shape == (3,):
-            return '(d3)' if NUMPY_LT_1_16 else '(3)'
+            return '(3)'
         elif self.ctype == 'double' and self.shape == (3, 3):
-            return '(d3, d3)' if NUMPY_LT_1_16 else '(3, 3)'
+            return '(3, 3)'
         else:
             return '()'
 
@@ -459,38 +450,10 @@ class Function:
              for args in (self.args_by_inout('in|inout'),
                           self.args_by_inout('inout|out|ret|stat'))])
 
-    def _d3_fix_arg_and_index(self):
-        if not any('d3' in arg.signature_shape
-                   for arg in self.args_by_inout('in|inout')):
-            for j, arg in enumerate(self.args_by_inout('out')):
-                if 'd3' in arg.signature_shape:
-                    return j, arg
-
-        return None, None
-
-    @property
-    def d3_fix_op_index(self):
-        """Whether only output arguments have a d3 dimension."""
-        index = self._d3_fix_arg_and_index()[0]
-        if index is not None:
-            len_in = len(list(self.args_by_inout('in')))
-            len_inout = len(list(self.args_by_inout('inout')))
-            index += + len_in + 2 * len_inout
-        return index
-
-    @property
-    def d3_fix_arg(self):
-        """Whether only output arguments have a d3 dimension."""
-        return self._d3_fix_arg_and_index()[1]
-
     @property
     def python_call(self):
         outnames = [arg.name for arg in self.args_by_inout('inout|out|stat|ret')]
         argnames = [arg.name for arg in self.args_by_inout('in|inout')]
-        argnames += [arg.name for arg in self.args_by_inout('inout')]
-        d3fix_index = self._d3_fix_arg_and_index()[0]
-        if d3fix_index is not None:
-            argnames += ['None'] * d3fix_index + [self.d3_fix_arg.name]
         return '{out} = {func}({args})'.format(out=', '.join(outnames),
                                                func='ufunc.' + self.pyname,
                                                args=', '.join(argnames))
@@ -691,9 +654,8 @@ def main(srcdir=DEFAULT_ERFA_LOC, outfn='core.py', ufuncfn='ufunc.c',
     #             funcs.append(ExtraFunction(match.group(1), ls, erfaextrahfn))
 
     print_("Rendering template")
-    erfa_c = erfa_c_in.render(funcs=funcs, NUMPY_LT_1_16=NUMPY_LT_1_16)
-    erfa_py = erfa_py_in.render(funcs=funcs, constants=constants,
-                                NUMPY_LT_1_16=NUMPY_LT_1_16)
+    erfa_c = erfa_c_in.render(funcs=funcs)
+    erfa_py = erfa_py_in.render(funcs=funcs, constants=constants)
 
     if outfn is not None:
         print_("Saving to", outfn, 'and', ufuncfn)

@@ -91,33 +91,31 @@ example if it must be non-negative).  See the example in
     from astropy.modeling import Fittable1DModel, Parameter
 
     class Gaussian1D(Fittable1DModel):
-        inputs = ('x',)
-        outputs = ('y',)
+        n_inputs = 1
+        n_outputs = 1
 
         amplitude = Parameter()
         mean = Parameter()
         stddev = Parameter()
 
-The ``inputs`` and ``outputs`` class attributes must be tuples of strings
+The ``n_inputs`` and ``n_outputs`` class attributes must be integers
 indicating the number of independent variables that are input to evaluate the
 model, and the number of outputs it returns.  The labels of the inputs and
-outputs (in this case ``'x'`` and ``'y'`` respectively) are currently used for
-informational purposes only and have no requirements on them other than that
-they do not conflict with parameter names.  Outputs may have the same labels as
-inputs (eg. ``inputs = ('x', 'y')`` and ``outputs = ('x', 'y')``).  However,
-inputs must not conflict with each other (eg. ``inputs = ('x', 'x')`` is
-incorrect) and likewise for outputs.  The lengths of these tuples are
-important for specifying the correct number of inputs and outputs.  These
-attributes supersede the ``n_inputs`` and ``n_outputs`` attributes in older
-versions of this package.
+outputs, ``inputs`` and ``outputs``, are generated automatically. It is possible
+to overwrite the default ones by assigning the desired values in the class ``__init__``
+method, after calling ``super``. ``outputs`` and ``inputs`` must be tuples of
+strings with length ``n_outputs`` and ``n_inputs`` respectively.
+Outputs may have the same labels as inputs (eg. ``inputs = ('x', 'y')`` and ``outputs = ('x', 'y')``).
+However, inputs must not conflict with each other (eg. ``inputs = ('x', 'x')`` is
+incorrect) and likewise for outputs.
 
 There are two helpful base classes in the modeling package that can be used to
-avoid specifying ``inputs`` and ``outputs`` for most common models.  These are
+avoid specifying ``n_inputs`` and ``n_outputs`` for most common models.  These are
 `~astropy.modeling.Fittable1DModel` and `~astropy.modeling.Fittable2DModel`.
-For example, the real `~astropy.modeling.functional_models.Gaussian1D` model is
-actually a subclass of `~astropy.modeling.Fittable1DModel`.  This helps cut
-down on boilerplate by not having to specify ``inputs`` and ``outputs`` for
-many models (follow the link to Gaussian1D to see its source code, for
+For example, the actual `~astropy.modeling.functional_models.Gaussian1D` model is
+a subclass of `~astropy.modeling.Fittable1DModel`. This helps cut
+down on boilerplate by not having to specify ``n_inputs``, ``n_outputs``, ``inputs``
+and ``outputs`` for many models (follow the link to Gaussian1D to see its source code, for
 example).
 
 Fittable models can be linear or nonlinear in a regression sense. The default
@@ -166,21 +164,20 @@ be ``None``::
 
     @staticmethod
     def fit_deriv(x, amplitude, mean, stddev):
-        d_amplitude = np.exp((-(1 / (stddev**2)) * (x - mean)**2))
-        d_mean = (2 * amplitude *
-                  np.exp((-(1 / (stddev**2)) * (x - mean)**2)) *
-                  (x - mean) / (stddev**2))
+        d_amplitude = np.exp(- 0.5 / stddev**2 * (x - mean)**2)
+        d_mean = (amplitude *
+                  np.exp(- 0.5 / stddev**2 * (x - mean)**2) *
+                  (x - mean) / stddev**2)
         d_stddev = (2 * amplitude *
-                    np.exp((-(1 / (stddev**2)) * (x - mean)**2)) *
-                    ((x - mean)**2) / (stddev**3))
+                    np.exp(- 0.5 / stddev**2 * (x - mean)**2) *
+                    (x - mean)**2 / stddev**3)
         return [d_amplitude, d_mean, d_stddev]
 
 
 Note that we did *not* have to define an ``__init__`` method or a ``__call__``
-method for our model (this contrasts with Astropy versions 0.4.x and earlier).
-For most models the ``__init__`` follows the same pattern, taking the parameter
-values as positional arguments, followed by several optional keyword arguments
-(constraints, etc.).  The modeling framework automatically generates an
+method for our model. For most models the ``__init__`` follows the same pattern,
+taking the parameter values as positional arguments, followed by several optional
+keyword arguments (constraints, etc.).  The modeling framework automatically generates an
 ``__init__`` for your class that has the correct calling signature (see for
 yourself by calling ``help(Gaussian1D.__init__)`` on the example model we just
 defined).
@@ -216,6 +213,7 @@ Full example
 
 .. code-block:: python
 
+    import numpy as np
     from astropy.modeling import Fittable1DModel, Parameter
 
     class Gaussian1D(Fittable1DModel):
@@ -251,8 +249,8 @@ input``.
 
 .. code-block:: python
 
-    from astropy.modeling import Fittable1DModel, Parameter
     import numpy as np
+    from astropy.modeling import Fittable1DModel, Parameter
 
     class LineModel(Fittable1DModel):
         slope = Parameter()
@@ -279,4 +277,3 @@ input``.
 
     The above example is essentially equivalent to the built-in
     `~astropy.modeling.functional_models.Linear1D` model.
-    

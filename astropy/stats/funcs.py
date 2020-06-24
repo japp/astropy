@@ -13,9 +13,8 @@ import math
 
 import numpy as np
 
-from astropy.utils import isiterable
+from astropy.utils.decorators import deprecated_renamed_argument
 from . import _stats
-
 
 __all__ = ['gaussian_fwhm_to_sigma', 'gaussian_sigma_to_fwhm',
            'binom_conf_interval', 'binned_binom_proportion',
@@ -25,10 +24,8 @@ __all__ = ['gaussian_fwhm_to_sigma', 'gaussian_sigma_to_fwhm',
            'interval_overlap_length', 'histogram_intervals', 'fold_intervals']
 
 __doctest_skip__ = ['binned_binom_proportion']
-__doctest_requires__ = {'binom_conf_interval': ['scipy.special'],
-                        'poisson_conf_interval': ['scipy.special',
-                                                  'scipy.optimize',
-                                                  'scipy.integrate']}
+__doctest_requires__ = {'binom_conf_interval': ['scipy'],
+                        'poisson_conf_interval': ['scipy']}
 
 
 gaussian_sigma_to_fwhm = 2.0 * math.sqrt(2.0 * math.log(2.0))
@@ -44,8 +41,55 @@ to convert it to 1-sigma standard deviation.
 """
 
 
+# NUMPY_LT_1_18
+def _expand_dims(data, axis):
+    """
+    Expand the shape of an array.
+
+    Insert a new axis that will appear at the `axis` position in the
+    expanded array shape.
+
+    This function allows for tuple axis arguments.
+    ``numpy.expand_dims`` currently does not allow that, but it will in
+    numpy v1.18 (https://github.com/numpy/numpy/pull/14051).
+    ``_expand_dims`` can be replaced with ``numpy.expand_dims`` when the
+    minimum support numpy version is v1.18.
+
+    Parameters
+    ----------
+    data : array_like
+        Input array.
+    axis : int or tuple of ints
+        Position in the expanded axes where the new axis (or axes) is
+        placed.  A tuple of axes is now supported.  Out of range axes as
+        described above are now forbidden and raise an `AxisError`.
+
+    Returns
+    -------
+    result : ndarray
+        View of ``data`` with the number of dimensions increased.
+    """
+
+    if isinstance(data, np.matrix):
+        data = np.asarray(data)
+    else:
+        data = np.asanyarray(data)
+
+    if not isinstance(axis, (tuple, list)):
+        axis = (axis,)
+
+    out_ndim = len(axis) + data.ndim
+    axis = np.core.numeric.normalize_axis_tuple(axis, out_ndim)
+
+    shape_it = iter(data.shape)
+    shape = [1 if ax in axis else next(shape_it) for ax in range(out_ndim)]
+
+    return data.reshape(shape)
+
+
 # TODO Note scipy dependency
-def binom_conf_interval(k, n, conf=0.68269, interval='wilson'):
+@deprecated_renamed_argument('conf', 'confidence_level', '4.0')
+def binom_conf_interval(k, n, confidence_level=0.68269, interval='wilson'):
     r"""Binomial proportion confidence interval given k successes,
     n trials.
 
@@ -56,7 +100,7 @@ def binom_conf_interval(k, n, conf=0.68269, interval='wilson'):
     n : int or numpy.ndarray
         Number of trials (``n`` > 0).  If both ``k`` and ``n`` are arrays,
         they must have the same shape.
-    conf : float in [0, 1], optional
+    confidence_level : float in [0, 1], optional
         Desired probability content of interval. Default is 0.68269,
         corresponding to 1 sigma in a 1-dimensional Gaussian distribution.
     interval : {'wilson', 'jeffreys', 'flat', 'wald'}, optional
@@ -172,43 +216,42 @@ def binom_conf_interval(k, n, conf=0.68269, interval='wilson'):
     --------
     Integer inputs return an array with shape (2,):
 
-    >>> binom_conf_interval(4, 5, interval='wilson')
-    array([ 0.57921724,  0.92078259])
+    >>> binom_conf_interval(4, 5, interval='wilson')  # doctest: +FLOAT_CMP
+    array([0.57921724, 0.92078259])
 
     Arrays of arbitrary dimension are supported. The Wilson and Jeffreys
     intervals give similar results, even for small k, N:
 
-    >>> binom_conf_interval([0, 1, 2, 5], 5, interval='wilson')
-    array([[ 0.        ,  0.07921741,  0.21597328,  0.83333304],
-           [ 0.16666696,  0.42078276,  0.61736012,  1.        ]])
+    >>> binom_conf_interval([1, 2], 5, interval='wilson')  # doctest: +FLOAT_CMP
+    array([[0.07921741, 0.21597328],
+           [0.42078276, 0.61736012]])
 
-    >>> binom_conf_interval([0, 1, 2, 5], 5, interval='jeffreys')
-    array([[ 0.        ,  0.0842525 ,  0.21789949,  0.82788246],
-           [ 0.17211754,  0.42218001,  0.61753691,  1.        ]])
+    >>> binom_conf_interval([1, 2,], 5, interval='jeffreys')  # doctest: +FLOAT_CMP
+    array([[0.0842525 , 0.21789949],
+           [0.42218001, 0.61753691]])
 
-    >>> binom_conf_interval([0, 1, 2, 5], 5, interval='flat')
-    array([[ 0.        ,  0.12139799,  0.24309021,  0.73577037],
-           [ 0.26422963,  0.45401727,  0.61535699,  1.        ]])
+    >>> binom_conf_interval([1, 2], 5, interval='flat')  # doctest: +FLOAT_CMP
+    array([[0.12139799, 0.24309021],
+           [0.45401727, 0.61535699]])
 
     In contrast, the Wald interval gives poor results for small k, N.
     For k = 0 or k = N, the interval always has zero length.
 
-    >>> binom_conf_interval([0, 1, 2, 5], 5, interval='wald')
-    array([[ 0.        ,  0.02111437,  0.18091075,  1.        ],
-           [ 0.        ,  0.37888563,  0.61908925,  1.        ]])
+    >>> binom_conf_interval([1, 2], 5, interval='wald')  # doctest: +FLOAT_CMP
+    array([[0.02111437, 0.18091075],
+           [0.37888563, 0.61908925]])
 
     For confidence intervals approaching 1, the Wald interval for
     0 < k < N can give intervals that extend outside [0, 1]:
 
-    >>> binom_conf_interval([0, 1, 2, 5], 5, interval='wald', conf=0.99)
-    array([[ 0.        , -0.26077835, -0.16433593,  1.        ],
-           [ 0.        ,  0.66077835,  0.96433593,  1.        ]])
+    >>> binom_conf_interval([1, 2], 5, interval='wald', confidence_level=0.99)  # doctest: +FLOAT_CMP
+    array([[-0.26077835, -0.16433593],
+           [ 0.66077835,  0.96433593]])
 
-    """
-
-    if conf < 0. or conf > 1.:
-        raise ValueError('conf must be between 0. and 1.')
-    alpha = 1. - conf
+    """  # noqa
+    if confidence_level < 0. or confidence_level > 1.:
+        raise ValueError('confidence_level must be between 0. and 1.')
+    alpha = 1. - confidence_level
 
     k = np.asarray(k).astype(int)
     n = np.asarray(n).astype(int)
@@ -220,7 +263,7 @@ def binom_conf_interval(k, n, conf=0.68269, interval='wilson'):
 
     if interval == 'wilson' or interval == 'wald':
         from scipy.special import erfinv
-        kappa = np.sqrt(2.) * min(erfinv(conf), 1.e10)  # Avoid overflows.
+        kappa = np.sqrt(2.) * min(erfinv(confidence_level), 1.e10)  # Avoid overflows.
         k = k.astype(float)
         n = n.astype(float)
         p = k / n
@@ -271,8 +314,9 @@ def binom_conf_interval(k, n, conf=0.68269, interval='wilson'):
 
 
 # TODO Note scipy dependency (needed in binom_conf_interval)
-def binned_binom_proportion(x, success, bins=10, range=None, conf=0.68269,
-                            interval='wilson'):
+@deprecated_renamed_argument('conf', 'confidence_level', '4.0')
+def binned_binom_proportion(x, success, bins=10, range=None,
+                            confidence_level=0.68269, interval='wilson'):
     """Binomial proportion and confidence interval in bins of a continuous
     variable ``x``.
 
@@ -298,7 +342,7 @@ def binned_binom_proportion(x, success, bins=10, range=None, conf=0.68269,
         The lower and upper range of the bins. If `None` (default),
         the range is set to ``(x.min(), x.max())``. Values outside the
         range are ignored.
-    conf : float in [0, 1], optional
+    confidence_level : float in [0, 1], optional
         Desired probability content in the confidence
         interval ``(p - perr[0], p + perr[1])`` in each bin. Default is
         0.68269.
@@ -330,7 +374,6 @@ def binned_binom_proportion(x, success, bins=10, range=None, conf=0.68269,
     --------
     binom_conf_interval : Function used to estimate confidence interval in
                           each bin.
-
 
     Examples
     --------
@@ -421,7 +464,6 @@ def binned_binom_proportion(x, success, bins=10, range=None, conf=0.68269,
        plt.show()
 
     """
-
     x = np.ravel(x)
     success = np.ravel(success).astype(bool)
     if x.shape != success.shape:
@@ -442,26 +484,27 @@ def binned_binom_proportion(x, success, bins=10, range=None, conf=0.68269,
     k = k[valid]
 
     p = k / n
-    bounds = binom_conf_interval(k, n, conf=conf, interval=interval)
+    bounds = binom_conf_interval(k, n, confidence_level=confidence_level, interval=interval)
     perr = np.abs(bounds - p)
 
     return bin_ctr, bin_halfwidth, p, perr
 
 
-def _check_poisson_conf_inputs(sigma, background, conflevel, name):
+def _check_poisson_conf_inputs(sigma, background, confidence_level, name):
     if sigma != 1:
         raise ValueError("Only sigma=1 supported for interval {}"
                          .format(name))
     if background != 0:
         raise ValueError("background not supported for interval {}"
                          .format(name))
-    if conflevel is not None:
-        raise ValueError("conflevel not supported for interval {}"
+    if confidence_level is not None:
+        raise ValueError("confidence_level not supported for interval {}"
                          .format(name))
 
 
+@deprecated_renamed_argument('conflevel', 'confidence_level', '4.0')
 def poisson_conf_interval(n, interval='root-n', sigma=1, background=0,
-                          conflevel=None):
+                          confidence_level=None):
     r"""Poisson parameter confidence interval given observed counts
 
     Parameters
@@ -478,10 +521,9 @@ def poisson_conf_interval(n, interval='root-n', sigma=1, background=0,
         Number of counts expected from the background; only supported for
         the 'kraft-burrows-nousek' mode. This number is assumed to be determined
         from a large region so that the uncertainty on its value is negligible.
-    conflevel : float, optional
+    confidence_level : float, optional
         Confidence level between 0 and 1; only supported for the
         'kraft-burrows-nousek' mode.
-
 
     Returns
     -------
@@ -494,7 +536,7 @@ def poisson_conf_interval(n, interval='root-n', sigma=1, background=0,
 
     The "right" confidence interval to use for Poisson data is a
     matter of debate. The CDF working group `recommends
-    <http://www-cdf.fnal.gov/physics/statistics/notes/pois_eb.txt>`_
+    <https://www-cdf.fnal.gov/physics/statistics/notes/pois_eb.txt>`_
     using root-n throughout, largely in the interest of
     comprehensibility, but discusses other possibilities. The ATLAS
     group also `discusses
@@ -524,7 +566,7 @@ def poisson_conf_interval(n, interval='root-n', sigma=1, background=0,
 
     **3. 'pearson'** This is an only-slightly-more-complicated rule
     based on Pearson's chi-squared rule (as `explained
-    <http://www-cdf.fnal.gov/physics/statistics/notes/pois_eb.txt>`_ by
+    <https://www-cdf.fnal.gov/physics/statistics/notes/pois_eb.txt>`_ by
     the CDF working group). It also has the nice feature that if your
     theory curve touches an endpoint of the interval, then your data
     point is indeed one sigma away. The interval is
@@ -638,8 +680,8 @@ def poisson_conf_interval(n, interval='root-n', sigma=1, background=0,
            [  5.62771868,  11.37228132],
            [  6.45861873,  12.54138127]])
 
-    >>> poisson_conf_interval(np.arange(10),
-    ...                       interval='frequentist-confidence').T
+    >>> poisson_conf_interval(
+    ...     np.arange(10), interval='frequentist-confidence').T
     array([[  0.        ,   1.84102165],
            [  0.17275378,   3.29952656],
            [  0.70818544,   4.63785962],
@@ -651,24 +693,26 @@ def poisson_conf_interval(n, interval='root-n', sigma=1, background=0,
            [  5.23161394,  11.94514152],
            [  6.05653896,  13.11020414]])
 
-    >>> poisson_conf_interval(7,
-    ...                       interval='frequentist-confidence').T
+    >>> poisson_conf_interval(
+    ...     7, interval='frequentist-confidence').T
     array([  4.41852954,  10.77028072])
 
-    >>> poisson_conf_interval(10, background=1.5, conflevel=0.95,
-    ...                       interval='kraft-burrows-nousek').T
-    array([  3.47894005, 16.113329533])   # doctest: +FLOAT_CMP
-    """
+    >>> poisson_conf_interval(
+    ...     10, background=1.5, confidence_level=0.95,
+    ...     interval='kraft-burrows-nousek').T  # doctest: +FLOAT_CMP
+    array([[ 3.47894005, 16.113329533]])
+
+    """  # noqa
 
     if not np.isscalar(n):
         n = np.asanyarray(n)
 
     if interval == 'root-n':
-        _check_poisson_conf_inputs(sigma, background, conflevel, interval)
+        _check_poisson_conf_inputs(sigma, background, confidence_level, interval)
         conf_interval = np.array([n - np.sqrt(n),
                                   n + np.sqrt(n)])
     elif interval == 'root-n-0':
-        _check_poisson_conf_inputs(sigma, background, conflevel, interval)
+        _check_poisson_conf_inputs(sigma, background, confidence_level, interval)
         conf_interval = np.array([n - np.sqrt(n),
                                   n + np.sqrt(n)])
         if np.isscalar(n):
@@ -677,15 +721,15 @@ def poisson_conf_interval(n, interval='root-n', sigma=1, background=0,
         else:
             conf_interval[1, n == 0] = 1
     elif interval == 'pearson':
-        _check_poisson_conf_inputs(sigma, background, conflevel, interval)
+        _check_poisson_conf_inputs(sigma, background, confidence_level, interval)
         conf_interval = np.array([n + 0.5 - np.sqrt(n + 0.25),
                                   n + 0.5 + np.sqrt(n + 0.25)])
     elif interval == 'sherpagehrels':
-        _check_poisson_conf_inputs(sigma, background, conflevel, interval)
+        _check_poisson_conf_inputs(sigma, background, confidence_level, interval)
         conf_interval = np.array([n - 1 - np.sqrt(n + 0.75),
                                   n + 1 + np.sqrt(n + 0.75)])
     elif interval == 'frequentist-confidence':
-        _check_poisson_conf_inputs(1., background, conflevel, interval)
+        _check_poisson_conf_inputs(1., background, confidence_level, interval)
         import scipy.stats
         alpha = scipy.stats.norm.sf(sigma)
         conf_interval = np.array([0.5 * scipy.stats.chi2(2 * n).ppf(alpha),
@@ -696,17 +740,17 @@ def poisson_conf_interval(n, interval='root-n', sigma=1, background=0,
         else:
             conf_interval[0, n == 0] = 0
     elif interval == 'kraft-burrows-nousek':
-        if conflevel is None:
-            raise ValueError('Set conflevel for method {}. (sigma is '
+        if confidence_level is None:
+            raise ValueError('Set confidence_level for method {}. (sigma is '
                              'ignored.)'.format(interval))
-        conflevel = np.asanyarray(conflevel)
-        if np.any(conflevel <= 0) or np.any(conflevel >= 1):
-            raise ValueError('Conflevel must be a number between 0 and 1.')
+        confidence_level = np.asanyarray(confidence_level)
+        if np.any(confidence_level <= 0) or np.any(confidence_level >= 1):
+            raise ValueError('confidence_level must be a number between 0 and 1.')
         background = np.asanyarray(background)
         if np.any(background < 0):
             raise ValueError('Background must be >= 0.')
         conf_interval = np.vectorize(_kraft_burrows_nousek,
-                                     cache=True)(n, background, conflevel)
+                                     cache=True)(n, background, confidence_level)
         conf_interval = np.vstack(conf_interval)
     else:
         raise ValueError("Invalid method for Poisson confidence intervals: "
@@ -722,11 +766,11 @@ def median_absolute_deviation(data, axis=None, func=None, ignore_nan=False):
 
     Parameters
     ----------
-    data : array-like
+    data : array_like
         Input array or object that can be converted to an array.
-    axis : {int, sequence of int, None}, optional
-        Axis along which the MADs are computed.  The default (`None`) is
-        to compute the MAD of the flattened array.
+    axis : `None`, int, or tuple of ints, optional
+        The axis or axes along which the MADs are computed.  The default
+        (`None`) is to compute the MAD of the flattened array.
     func : callable, optional
         The function used to compute the median. Defaults to `numpy.ma.median`
         for masked arrays, otherwise to `numpy.median`.
@@ -770,7 +814,7 @@ def median_absolute_deviation(data, axis=None, func=None, ignore_nan=False):
             is_masked = True
             func = np.ma.median
             if ignore_nan:
-                data = np.ma.masked_invalid(data)
+                data = np.ma.masked_where(np.isnan(data), data, copy=True)
         elif ignore_nan:
             is_masked = False
             func = np.nanmedian
@@ -787,11 +831,7 @@ def median_absolute_deviation(data, axis=None, func=None, ignore_nan=False):
 
     # broadcast the median array before subtraction
     if axis is not None:
-        if isiterable(axis):
-            for ax in sorted(list(axis)):
-                data_median = np.expand_dims(data_median, axis=ax)
-        else:
-            data_median = np.expand_dims(data_median, axis=axis)
+        data_median = _expand_dims(data_median, axis=axis)  # NUMPY_LT_1_18
 
     result = func(np.abs(data - data_median), axis=axis, overwrite_input=True)
 
@@ -824,12 +864,12 @@ def mad_std(data, axis=None, func=None, ignore_nan=False):
 
     Parameters
     ----------
-    data : array-like
+    data : array_like
         Data array or object that can be converted to an array.
-    axis : {int, sequence of int, None}, optional
-        Axis along which the robust standard deviations are computed.
-        The default (`None`) is to compute the robust standard deviation
-        of the flattened array.
+    axis : `None`, int, or tuple of ints, optional
+        The axis or axes along which the robust standard deviations are
+        computed.  The default (`None`) is to compute the robust
+        standard deviation of the flattened array.
     func : callable, optional
         The function used to compute the median. Defaults to `numpy.ma.median`
         for masked arrays, otherwise to `numpy.median`.
@@ -1031,12 +1071,12 @@ def _scipy_kraft_burrows_nousek(N, B, CL):
 
     Parameters
     ----------
-    N : int
+    N : int or np.int32/np.int64
         Total observed count number
-    B : float
+    B : float or np.float32/np.float64
         Background count rate (assumed to be known with negligible error
         from a large background area).
-    CL : float
+    CL : float or np.float32/np.float64
        Confidence level (number between 0 and 1)
 
     Returns
@@ -1116,12 +1156,12 @@ def _mpmath_kraft_burrows_nousek(N, B, CL):
 
     Parameters
     ----------
-    N : int
+    N : int or np.int32/np.int64
         Total observed count number
-    B : float
+    B : float or np.float32/np.float64
         Background count rate (assumed to be known with negligible error
         from a large background area).
-    CL : float
+    CL : float or np.float32/np.float64
        Confidence level (number between 0 and 1)
 
     Returns
@@ -1137,9 +1177,11 @@ def _mpmath_kraft_burrows_nousek(N, B, CL):
     '''
     from mpmath import mpf, factorial, findroot, fsum, power, exp, quad
 
-    N = mpf(N)
-    B = mpf(B)
-    CL = mpf(CL)
+    # We convert these values to float. Because for some reason,
+    # mpmath.mpf cannot convert from numpy.int64
+    N = mpf(float(N))
+    B = mpf(float(B))
+    CL = mpf(float(CL))
 
     def eqn8(N, B):
         sumterms = [power(B, n) / factorial(n) for n in range(int(N) + 1)]
@@ -1193,12 +1235,12 @@ def _kraft_burrows_nousek(N, B, CL):
 
     Parameters
     ----------
-    N : int
+    N : int or np.int32/np.int64
         Total observed count number
-    B : float
+    B : float or np.float32/np.float64
         Background count rate (assumed to be known with negligible error
         from a large background area).
-    CL : float
+    CL : float or np.float32/np.float64
        Confidence level (number between 0 and 1)
 
     Returns
@@ -1325,7 +1367,7 @@ def kuiper(data, cdf=lambda x: x, args=()):
 
     Parameters
     ----------
-    data : array-like
+    data : array_like
         The data values.
     cdf : callable
         A callable to evaluate the CDF of the distribution being tested
@@ -1391,9 +1433,9 @@ def kuiper_two(data1, data2):
 
     Parameters
     ----------
-    data1 : array-like
+    data1 : array_like
         The first set of data values.
-    data2 : array-like
+    data2 : array_like
         The second set of data values.
 
     Returns

@@ -1,20 +1,28 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-from astropy.visualization.wcsaxes.core import WCSAxes
 import matplotlib.pyplot as plt
+import pytest
 from matplotlib.backend_bases import KeyEvent
 
-from astropy.wcs import WCS
-from astropy.coordinates import FK5
+import numpy as np
+
+import astropy.units as u
+from astropy.coordinates import FK5, SkyCoord
+from astropy.io import fits
 from astropy.time import Time
-from astropy.tests.image_tests import ignore_matplotlibrc
+from astropy.utils.data import get_pkg_data_filename
+from astropy.visualization.wcsaxes.core import WCSAxes
+from astropy.wcs import WCS
+from astropy.coordinates import galactocentric_frame_defaults
 
 from .test_images import BaseImageTests
 
 
 class TestDisplayWorldCoordinate(BaseImageTests):
 
-    @ignore_matplotlibrc
-    def test_overlay_coords(self, tmpdir):
+    def teardown_method(self, method):
+        plt.close('all')
+
+    def test_overlay_coords(self, ignore_matplotlibrc, tmpdir):
         wcs = WCS(self.msx_header)
 
         fig = plt.figure(figsize=(4, 4))
@@ -94,8 +102,7 @@ class TestDisplayWorldCoordinate(BaseImageTests):
 
         assert string_world5 == '267.652\xb0 -28\xb046\'23" (world, overlay 3)'
 
-    @ignore_matplotlibrc
-    def test_cube_coords(self, tmpdir):
+    def test_cube_coords(self, ignore_matplotlibrc, tmpdir):
         wcs = WCS(self.cube_header)
 
         fig = plt.figure(figsize=(4, 4))
@@ -118,8 +125,7 @@ class TestDisplayWorldCoordinate(BaseImageTests):
         string_pixel = ax._display_world_coords(0.523412, 0.523412)
         assert string_pixel == "0.523412 0.523412 (pixel)"
 
-    @ignore_matplotlibrc
-    def test_cube_coords_uncorr_slicing(self, tmpdir):
+    def test_cube_coords_uncorr_slicing(self, ignore_matplotlibrc, tmpdir):
 
         # Regression test for a bug that occurred with coordinate formatting if
         # some dimensions were uncorrelated and sliced out.
@@ -145,3 +151,15 @@ class TestDisplayWorldCoordinate(BaseImageTests):
         fig.canvas.key_press_event(event1.key, guiEvent=event1)
         string_pixel = ax._display_world_coords(0.523412, 0.523412)
         assert string_pixel == "0.523412 0.523412 (pixel)"
+
+    def test_plot_coord_3d_transform(self):
+        wcs = WCS(self.msx_header)
+
+        with galactocentric_frame_defaults.set('latest'):
+            coord = SkyCoord(0 * u.kpc, 0 * u.kpc, 0 * u.kpc, frame='galactocentric')
+
+        fig = plt.figure()
+        ax = fig.add_subplot(1, 1, 1, projection=wcs)
+        point, = ax.plot_coord(coord, 'ro')
+
+        np.testing.assert_allclose(point.get_xydata()[0], [0, 0], atol=1e-4)

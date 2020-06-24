@@ -9,23 +9,30 @@ configuration files for Astropy and affiliated packages.
     found at http://www.voidspace.org.uk/python/configobj.html.
 """
 
-from contextlib import contextmanager
-import hashlib
 import io
-from os import path
 import re
+import hashlib
+import pathlib
+import pkgutil
+import warnings
+import importlib
+import contextlib
+from os import path
+from textwrap import TextWrapper
 from warnings import warn
+from contextlib import contextmanager
 
 from astropy.extern.configobj import configobj, validate
-from astropy.utils.exceptions import AstropyWarning, AstropyDeprecationWarning
 from astropy.utils import find_current_module
+from astropy.utils.exceptions import AstropyDeprecationWarning, AstropyWarning
 from astropy.utils.introspection import resolve_name
-from .paths import get_config_dir
 
+from .paths import get_config_dir
 
 __all__ = ['InvalidConfigurationItemWarning',
            'ConfigurationMissingWarning', 'get_config',
-           'reload_config', 'ConfigNamespace', 'ConfigItem']
+           'reload_config', 'ConfigNamespace', 'ConfigItem',
+           'generate_config']
 
 
 class InvalidConfigurationItemWarning(AstropyWarning):
@@ -91,6 +98,26 @@ class ConfigNamespace(metaclass=_ConfigNamespaceMeta):
                 aliases=['astropy.utils.console.USE_COLOR'])
         conf = Conf()
     """
+    def __iter__(self):
+        for key, val in self.__class__.__dict__.items():
+            if isinstance(val, ConfigItem):
+                yield key
+
+    keys = __iter__
+    """Iterate over configuration item names."""
+
+    def values(self):
+        """Iterate over configuration item values."""
+        for val in self.__class__.__dict__.values():
+            if isinstance(val, ConfigItem):
+                yield val
+
+    def items(self):
+        """Iterate over configuration item ``(name, value)`` pairs."""
+        for key, val in self.__class__.__dict__.items():
+            if isinstance(val, ConfigItem):
+                yield key, val
+
     def set_temp(self, attr, value):
         """
         Temporarily set a configuration value.
@@ -130,9 +157,8 @@ class ConfigNamespace(metaclass=_ConfigNamespaceMeta):
                 return self.__class__.__dict__[attr].reload()
             raise AttributeError(f"No configuration parameter '{attr}'")
 
-        for item in self.__class__.__dict__.values():
-            if isinstance(item, ConfigItem):
-                item.reload()
+        for item in self.values():
+            item.reload()
 
     def reset(self, attr=None):
         """
@@ -151,9 +177,8 @@ class ConfigNamespace(metaclass=_ConfigNamespaceMeta):
                 return
             raise AttributeError(f"No configuration parameter '{attr}'")
 
-        for item in self.__class__.__dict__.values():
-            if isinstance(item, ConfigItem):
-                item.set(item.defaultvalue)
+        for item in self.values():
+            item.set(item.defaultvalue)
 
 
 class ConfigItem:
@@ -214,6 +239,11 @@ class ConfigItem:
     """
     A type specifier like those used as the *values* of a particular key in a
     ``configspec`` file of ``configobj``.
+    """
+
+    rootname = 'astropy'
+    """
+    Rootname sets the base path for all config files.
     """
 
     def __init__(self, defaultvalue='', description=None, cfgtype=None,
@@ -294,7 +324,7 @@ class ConfigItem:
             msg = 'Provided value for configuration item {0} not valid: {1}'
             raise TypeError(msg.format(self.name, e.args[0]))
 
-        sec = get_config(self.module)
+        sec = get_config(self.module, rootname=self.rootname)
 
         sec[self.name] = value
 
@@ -336,7 +366,7 @@ class ConfigItem:
             The new value loaded from the configuration file.
         """
         self.set(self.defaultvalue)
-        baseobj = get_config(self.module, True)
+        baseobj = get_config(self.module, True, rootname=self.rootname)
         secname = baseobj.name
 
         cobj = baseobj
@@ -392,13 +422,13 @@ class ConfigItem:
                 return f'in section [{section}]'
 
         options = []
-        sec = get_config(self.module)
+        sec = get_config(self.module, rootname=self.rootname)
         if self.name in sec:
             options.append((sec[self.name], self.module, self.name))
 
         for alias in self.aliases:
             module, name = alias.rsplit('.', 1)
-            sec = get_config(module)
+            sec = get_config(module, rootname=self.rootname)
             if '.' in module:
                 filename, module = module.split('.', 1)
             else:
@@ -412,7 +442,8 @@ class ConfigItem:
                 warn(
                     "Config parameter '{}' {} of the file '{}' "
                     "is deprecated. Use '{}' {} instead.".format(
-                        name, section_name(module), get_config_filename(filename),
+                        name, section_name(module), get_config_filename(filename,
+                                                                        rootname=self.rootname),
                         self.name, section_name(new_module)),
                     AstropyDeprecationWarning)
                 options.append((sec[name], module, name))
@@ -426,7 +457,8 @@ class ConfigItem:
             warn(
                 "Config parameter '{}' {} of the file '{}' is "
                 "given by more than one alias ({}). Using the first.".format(
-                    self.name, section_name(sec), get_config_filename(filename),
+                    self.name, section_name(sec), get_config_filename(filename,
+                                                                      rootname=self.rootname),
                     ', '.join([
                         '.'.join(x[1:3]) for x in options if x[1] is not None])),
                 AstropyDeprecationWarning)
@@ -455,12 +487,12 @@ class ConfigItem:
 _cfgobjs = {}
 
 
-def get_config_filename(packageormod=None):
+def get_config_filename(packageormod=None, rootname=None):
     """
     Get the filename of the config file associated with the given
     package or module.
     """
-    cfg = get_config(packageormod)
+    cfg = get_config(packageormod, rootname=rootname)
     while cfg.parent is not cfg:
         cfg = cfg.parent
     return cfg.filename
@@ -472,7 +504,7 @@ def get_config_filename(packageormod=None):
 _override_config_file = None
 
 
-def get_config(packageormod=None, reload=False):
+def get_config(packageormod=None, reload=False, rootname=None):
     """ Gets the configuration object or section associated with a particular
     package or module.
 
@@ -480,11 +512,17 @@ def get_config(packageormod=None, reload=False):
     -----------
     packageormod : str or None
         The package for which to retrieve the configuration object. If a
-        string, it must be a valid package name, or if `None`, the package from
+        string, it must be a valid package name, or if ``None``, the package from
         which this function is called will be used.
 
     reload : bool, optional
         Reload the file, even if we have it cached.
+
+    rootname : str or None
+        Name of the root configuration directory. If ``None`` and
+        ``packageormod`` is ``None``, this defaults to be the name of
+        the package from which this function is called. If ``None`` and
+        ``packageormod`` is not ``None``, this defaults to ``astropy``.
 
     Returns
     -------
@@ -499,6 +537,7 @@ def get_config(packageormod=None, reload=False):
         If ``packageormod`` is `None`, but the package this item is created
         from cannot be determined.
     """
+
     if packageormod is None:
         packageormod = find_current_module(2)
         if packageormod is None:
@@ -508,11 +547,22 @@ def get_config(packageormod=None, reload=False):
         else:
             packageormod = packageormod.__name__
 
+        _autopkg = True
+
+    else:
+        _autopkg = False
+
     packageormodspl = packageormod.split('.')
-    rootname = packageormodspl[0]
+    pkgname = packageormodspl[0]
     secname = '.'.join(packageormodspl[1:])
 
-    cobj = _cfgobjs.get(rootname, None)
+    if rootname is None:
+        if _autopkg:
+            rootname = pkgname
+        else:
+            rootname = 'astropy'  # so we don't break affiliated packages
+
+    cobj = _cfgobjs.get(pkgname, None)
 
     if cobj is None or reload:
         cfgfn = None
@@ -521,7 +571,7 @@ def get_config(packageormod=None, reload=False):
             if _override_config_file is not None:
                 cfgfn = _override_config_file
             else:
-                cfgfn = path.join(get_config_dir(), rootname + '.cfg')
+                cfgfn = path.join(get_config_dir(rootname=rootname), pkgname + '.cfg')
             cobj = configobj.ConfigObj(cfgfn, interpolation=False)
         except OSError as e:
             msg = ('Configuration defaults will be used due to ')
@@ -534,7 +584,7 @@ def get_config(packageormod=None, reload=False):
             # function won't see it unless the module is reloaded
             cobj = configobj.ConfigObj(interpolation=False)
 
-        _cfgobjs[rootname] = cobj
+        _cfgobjs[pkgname] = cobj
 
     if secname:  # not the root package
         if secname not in cobj:
@@ -544,7 +594,67 @@ def get_config(packageormod=None, reload=False):
         return cobj
 
 
-def reload_config(packageormod=None):
+def generate_config(pkgname='astropy', filename=None):
+    """Generates a configuration file, from the list of `ConfigItem`
+    objects for each subpackage.
+
+    .. versionadded:: 4.1
+
+    Parameters
+    ----------
+    packageormod : str or None
+        The package for which to retrieve the configuration object.
+    filename : str or file object or None
+        If None, the default configuration path is taken from `get_config`.
+
+    """
+    package = importlib.import_module(pkgname)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', AstropyDeprecationWarning)
+        for mod in pkgutil.walk_packages(path=package.__path__,
+                                         prefix=package.__name__ + '.'):
+
+            if mod.module_finder.path.endswith(('test', 'tests')):
+                # Skip test modules
+                continue
+            if mod.name.split('.')[-1].startswith('_'):
+                # Skip private modules
+                continue
+
+            with contextlib.suppress(ImportError):
+                importlib.import_module(mod.name)
+
+    wrapper = TextWrapper(initial_indent="## ", subsequent_indent='## ',
+                          width=78)
+
+    if filename is None:
+        filename = get_config(package).filename
+
+    with contextlib.ExitStack() as stack:
+        if isinstance(filename, (str, pathlib.Path)):
+            fp = stack.enter_context(open(filename, 'w'))
+        else:
+            # assume it's a file object, or io.StringIO
+            fp = filename
+
+        # Parse the subclasses, ordered by their module name
+        subclasses = ConfigNamespace.__subclasses__()
+        for conf in sorted(subclasses, key=lambda x: x.__module__):
+            print_module = True
+            for item in conf().values():
+                if print_module:
+                    # If this is the first item of the module, we print the
+                    # module name, but not if this is the root package...
+                    if item.module != pkgname:
+                        modname = item.module.replace(f'{pkgname}.', '')
+                        fp.write(f"[{modname}]\n\n")
+                    print_module = False
+
+                fp.write(wrapper.fill(item.description) + '\n')
+                fp.write(f'# {item.name} = {item.defaultvalue}\n\n')
+
+
+def reload_config(packageormod=None, rootname=None):
     """ Reloads configuration settings from a configuration file for the root
     package of the requested package/module.
 
@@ -558,8 +668,11 @@ def reload_config(packageormod=None):
     ----------
     packageormod : str or None
         The package or module name - see `get_config` for details.
+    rootname : str or None
+        Name of the root configuration directory - see `get_config`
+        for details.
     """
-    sec = get_config(packageormod, True)
+    sec = get_config(packageormod, True, rootname=rootname)
     # look for the section that is its own parent - that's the base object
     while sec.parent is not sec:
         sec = sec.parent
@@ -616,7 +729,7 @@ def is_unedited_config_file(content, template_content=None):
 
 
 # this is not in __all__ because it's not intended that a user uses it
-def update_default_config(pkg, default_cfg_dir_or_fn, version=None):
+def update_default_config(pkg, default_cfg_dir_or_fn, version=None, rootname='astropy'):
     """
     Checks if the configuration file for the specified package exists,
     and if not, copy over the default configuration.  If the
@@ -634,6 +747,8 @@ def update_default_config(pkg, default_cfg_dir_or_fn, version=None):
     version : str, optional
         The current version of the given package.  If not provided, it will
         be obtained from ``pkg.__version__``.
+    rootname : str
+        Name of the root configuration directory.
 
     Returns
     -------
@@ -658,7 +773,7 @@ def update_default_config(pkg, default_cfg_dir_or_fn, version=None):
         # system, so just return.
         return False
 
-    cfgfn = get_config(pkg).filename
+    cfgfn = get_config(pkg, rootname=rootname).filename
 
     with open(default_cfgfn, 'rt', encoding='latin-1') as fr:
         template_content = fr.read()
@@ -683,9 +798,9 @@ def update_default_config(pkg, default_cfg_dir_or_fn, version=None):
 
     # Don't install template files for dev versions, or we'll end up
     # spamming `~/.astropy/config`.
-    if 'dev' not in version and cfgfn is not None:
+    if version and 'dev' not in version and cfgfn is not None:
         template_path = path.join(
-            get_config_dir(), f'{pkg}.{version}.cfg')
+            get_config_dir(rootname=rootname), f'{pkg}.{version}.cfg')
         needs_template = not path.exists(template_path)
     else:
         needs_template = False

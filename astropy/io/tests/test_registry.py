@@ -10,6 +10,8 @@ import numpy as np
 from astropy.io.registry import _readers, _writers, _identifiers
 from astropy.io import registry as io_registry
 from astropy.table import Table
+from astropy.utils.compat.context import nullcontext
+from astropy.utils.exceptions import AstropyUserWarning
 from astropy import units as u
 
 # Since we reset the readers/writers below, we need to also import any
@@ -25,7 +27,7 @@ from astropy import timeseries  # noqa
 ORIGINAL = {}
 
 try:
-    import yaml  # pylint: disable=W0611
+    import yaml  # pylint: disable=W0611 # noqa
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
@@ -60,14 +62,16 @@ def empty_identifier(*args, **kwargs):
 
 def test_get_reader_invalid():
     with pytest.raises(io_registry.IORegistryError) as exc:
-        io_registry.get_reader('test', TestData)
+        with pytest.warns(FutureWarning):
+            io_registry.get_reader('test', TestData)
     assert str(exc.value).startswith(
         "No reader defined for format 'test' and class 'TestData'")
 
 
 def test_get_writer_invalid():
     with pytest.raises(io_registry.IORegistryError) as exc:
-        io_registry.get_writer('test', TestData)
+        with pytest.warns(FutureWarning):
+            io_registry.get_writer('test', TestData)
     assert str(exc.value).startswith(
         "No writer defined for format 'test' and class 'TestData'")
 
@@ -86,10 +90,12 @@ def test_register_reader():
         io_registry.get_reader('test1', TestData)
     assert io_registry.get_reader('test2', TestData) == empty_reader
 
-    io_registry.unregister_reader('test2', TestData)
+    with pytest.warns(FutureWarning):
+        io_registry.unregister_reader('test2', TestData)
 
     with pytest.raises(io_registry.IORegistryError):
-        io_registry.get_reader('test2', TestData)
+        with pytest.warns(FutureWarning):
+            io_registry.get_reader('test2', TestData)
 
 
 def test_register_writer():
@@ -106,10 +112,12 @@ def test_register_writer():
         io_registry.get_writer('test1', TestData)
     assert io_registry.get_writer('test2', TestData) == empty_writer
 
-    io_registry.unregister_writer('test2', TestData)
+    with pytest.warns(FutureWarning):
+        io_registry.unregister_writer('test2', TestData)
 
     with pytest.raises(io_registry.IORegistryError):
-        io_registry.get_writer('test2', TestData)
+        with pytest.warns(FutureWarning):
+            io_registry.get_writer('test2', TestData)
 
 
 def test_register_identifier():
@@ -180,22 +188,31 @@ def test_register_identifier_force():
 
 def test_read_noformat():
     with pytest.raises(io_registry.IORegistryError) as exc:
-        TestData.read()
-    assert str(exc.value).startswith("Format could not be identified.")
+        with pytest.warns(FutureWarning):
+            TestData.read()
+    assert str(exc.value).startswith("Format could not be identified based on the"
+                                     " file name or contents, please provide a"
+                                     " 'format' argument.")
 
 
 def test_write_noformat():
     with pytest.raises(io_registry.IORegistryError) as exc:
-        TestData().write()
-    assert str(exc.value).startswith("Format could not be identified.")
+        with pytest.warns(FutureWarning):
+            TestData().write()
+    assert str(exc.value).startswith("Format could not be identified based on the"
+                                     " file name or contents, please provide a"
+                                     " 'format' argument.")
 
 
 def test_read_noformat_arbitrary():
     """Test that all identifier functions can accept arbitrary input"""
     _identifiers.update(ORIGINAL['identifiers'])
     with pytest.raises(io_registry.IORegistryError) as exc:
-        TestData.read(object())
-    assert str(exc.value).startswith("Format could not be identified.")
+        with pytest.warns(FutureWarning):
+            TestData.read(object())
+    assert str(exc.value).startswith("Format could not be identified based on the"
+                                     " file name or contents, please provide a"
+                                     " 'format' argument.")
 
 
 def test_read_noformat_arbitrary_file(tmpdir):
@@ -207,15 +224,20 @@ def test_read_noformat_arbitrary_file(tmpdir):
 
     with pytest.raises(io_registry.IORegistryError) as exc:
         Table.read(testfile)
-    assert str(exc.value).startswith("Format could not be identified.")
+    assert str(exc.value).startswith("Format could not be identified based on the"
+                                     " file name or contents, please provide a"
+                                     " 'format' argument.")
 
 
 def test_write_noformat_arbitrary():
     """Test that all identifier functions can accept arbitrary input"""
     _identifiers.update(ORIGINAL['identifiers'])
     with pytest.raises(io_registry.IORegistryError) as exc:
-        TestData().write(object())
-    assert str(exc.value).startswith("Format could not be identified.")
+        with pytest.warns(FutureWarning):
+            TestData().write(object())
+    assert str(exc.value).startswith("Format could not be identified based on the"
+                                     " file name or contents, please provide a"
+                                     " 'format' argument.")
 
 
 def test_write_noformat_arbitrary_file(tmpdir):
@@ -225,7 +247,9 @@ def test_write_noformat_arbitrary_file(tmpdir):
 
     with pytest.raises(io_registry.IORegistryError) as exc:
         Table().write(testfile)
-    assert str(exc.value).startswith("Format could not be identified.")
+    assert str(exc.value).startswith("Format could not be identified based on the"
+                                     " file name or contents, please provide a"
+                                     " 'format' argument.")
 
 
 def test_read_toomanyformats():
@@ -246,14 +270,16 @@ def test_write_toomanyformats():
 
 def test_read_format_noreader():
     with pytest.raises(io_registry.IORegistryError) as exc:
-        TestData.read(format='test')
+        with pytest.warns(FutureWarning):
+            TestData.read(format='test')
     assert str(exc.value).startswith(
         "No reader defined for format 'test' and class 'TestData'")
 
 
 def test_write_format_nowriter():
     with pytest.raises(io_registry.IORegistryError) as exc:
-        TestData().write(format='test')
+        with pytest.warns(FutureWarning):
+            TestData().write(format='test')
     assert str(exc.value).startswith(
         "No writer defined for format 'test' and class 'TestData'")
 
@@ -274,14 +300,16 @@ def test_read_identifier(tmpdir):
     filename = tmpdir.join("testfile.a").strpath
     open(filename, 'w').close()
     with pytest.raises(io_registry.IORegistryError) as exc:
-        TestData.read(filename)
+        with pytest.warns(FutureWarning):
+            TestData.read(filename)
     assert str(exc.value).startswith(
         "No reader defined for format 'test1' and class 'TestData'")
 
     filename = tmpdir.join("testfile.b").strpath
     open(filename, 'w').close()
     with pytest.raises(io_registry.IORegistryError) as exc:
-        TestData.read(filename)
+        with pytest.warns(FutureWarning):
+            TestData.read(filename)
     assert str(exc.value).startswith(
         "No reader defined for format 'test2' and class 'TestData'")
 
@@ -296,12 +324,14 @@ def test_write_identifier():
     # will tell us if the identifier worked.
 
     with pytest.raises(io_registry.IORegistryError) as exc:
-        TestData().write('abc')
+        with pytest.warns(FutureWarning):
+            TestData().write('abc')
     assert str(exc.value).startswith(
         "No writer defined for format 'test1' and class 'TestData'")
 
     with pytest.raises(io_registry.IORegistryError) as exc:
-        TestData().write('bac')
+        with pytest.warns(FutureWarning):
+            TestData().write('bac')
     assert str(exc.value).startswith(
         "No writer defined for format 'test2' and class 'TestData'")
 
@@ -436,8 +466,16 @@ class TestSubclass:
         mt['a'].format = '.4f'
         mt['a'].description = 'hello'
 
+        if HAS_YAML:
+            ctx = nullcontext()
+        else:
+            ctx = pytest.warns(
+                AstropyUserWarning,
+                match="These will be dropped unless you install PyYAML")
+
         testfile = str(tmpdir.join('junk.fits'))
-        mt.write(testfile, overwrite=True)
+        with ctx:
+            mt.write(testfile, overwrite=True)
 
         t = MTable.read(testfile)
         assert np.all(mt == t)
@@ -449,3 +487,25 @@ class TestSubclass:
             assert t['a'].description == 'hello'
         else:
             assert t['a'].description is None
+
+
+def test_directory(tmpdir):
+
+    # Regression test for a bug that caused the I/O registry infrastructure to
+    # not work correctly for datasets that are represented by folders as
+    # opposed to files, when using the descriptors to add read/write methods.
+
+    io_registry.register_identifier('test_folder_format', TestData,
+                                    lambda o, *x, **y: o == 'read')
+    io_registry.register_reader('test_folder_format', TestData,
+                                empty_reader)
+
+    filename = tmpdir.mkdir('folder_dataset').strpath
+
+    # With the format explicitly specified
+    dataset = TestData.read(filename, format='test_folder_format')
+    assert isinstance(dataset, TestData)
+
+    # With the auto-format identification
+    dataset = TestData.read(filename)
+    assert isinstance(dataset, TestData)

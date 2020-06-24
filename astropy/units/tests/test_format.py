@@ -5,6 +5,8 @@
 Regression tests for the units.format package
 """
 
+from fractions import Fraction
+
 import pytest
 import numpy as np
 from numpy.testing import assert_allclose
@@ -12,7 +14,7 @@ from numpy.testing import assert_allclose
 from astropy.tests.helper import catch_warnings
 from astropy import units as u
 from astropy.constants import si
-from astropy.units import core
+from astropy.units import core, dex
 from astropy.units import format as u_format
 from astropy.units.utils import is_effectively_unity
 
@@ -32,7 +34,8 @@ from astropy.units.utils import is_effectively_unity
     (["mag"], u.mag),
     (["mag(ct/s)"], u.MagUnit(u.ct / u.s)),
     (["dex"], u.dex),
-    (["dex(cm s**-2)", "dex(cm/s2)"], u.DexUnit(u.cm / u.s**2))])
+    (["dex(cm s**-2)", "dex(cm/s2)"], u.DexUnit(u.cm / u.s**2)),
+])
 def test_unit_grammar(strings, unit):
     for s in strings:
         print(s)
@@ -79,7 +82,9 @@ def test_unit_grammar_fail(string):
     (["°/s"], u.degree / u.s),
     (["Å"], u.AA),
     (["Å/s"], u.AA / u.s),
-    (["\\h"], si.h)])
+    (["\\h"], si.h),
+    (["[cm/s2]"], dex(u.cm / u.s ** 2)),
+    (["[K]"], dex(u.K))])
 def test_cds_grammar(strings, unit):
     for s in strings:
         print(s)
@@ -233,6 +238,13 @@ class TestRoundtripCDS(RoundtripBase):
             return
 
         self.check_roundtrip_decompose(unit)
+
+    @pytest.mark.parametrize('unit', [u.dex(unit) for unit in
+                                      (u.cm/u.s**2, u.K, u.Lsun)])
+    def test_roundtrip_dex(self, unit):
+        string = unit.to_string(format='cds')
+        recovered = u.Unit(string, format='cds')
+        assert recovered == unit
 
 
 class TestRoundtripOGIP(RoundtripBase):
@@ -541,3 +553,67 @@ def test_fits_scale_factor_errors():
 
     x = u.Unit(100.0 * u.erg)
     assert x.to_string(format='fits') == '10**2 erg'
+
+
+def test_double_superscript():
+    """Regression test for #5870, #8699, #9218; avoid double superscripts."""
+    assert (u.deg).to_string("latex") == r'$\mathrm{{}^{\circ}}$'
+    assert (u.deg**2).to_string("latex") == r'$\mathrm{deg^{2}}$'
+    assert (u.arcmin).to_string("latex") == r'$\mathrm{{}^{\prime}}$'
+    assert (u.arcmin**2).to_string("latex") == r'$\mathrm{arcmin^{2}}$'
+    assert (u.arcsec).to_string("latex") == r'$\mathrm{{}^{\prime\prime}}$'
+    assert (u.arcsec**2).to_string("latex") == r'$\mathrm{arcsec^{2}}$'
+    assert (u.hourangle).to_string("latex") == r'$\mathrm{{}^{h}}$'
+    assert (u.hourangle**2).to_string("latex") == r'$\mathrm{hourangle^{2}}$'
+    assert (u.electron).to_string("latex") == r'$\mathrm{e^{-}}$'
+    assert (u.electron**2).to_string("latex") == r'$\mathrm{electron^{2}}$'
+
+
+@pytest.mark.parametrize('power,expected', (
+    (1., 'm'), (2., 'm2'), (-10, '1 / m10'), (1.5, 'm(3/2)'), (2/3, 'm(2/3)'),
+    (7/11, 'm(7/11)'), (-1/64, '1 / m(1/64)'), (1/100, 'm(1/100)'),
+    (2/101, 'm(0.019801980198019802)'), (Fraction(2, 101), 'm(2/101)')))
+def test_powers(power, expected):
+    """Regression test for #9279 - powers should not be oversimplified."""
+    unit = u.m ** power
+    s = unit.to_string()
+    assert s == expected
+    assert unit == s
+
+
+@pytest.mark.parametrize('string,unit', [
+    ('\N{MICRO SIGN}g', u.microgram),
+    ('\N{GREEK SMALL LETTER MU}g', u.microgram),
+    ('g\N{MINUS SIGN}1', u.g**(-1)),
+    ('m\N{SUPERSCRIPT MINUS}\N{SUPERSCRIPT ONE}', 1 / u.m),
+    ('m s\N{SUPERSCRIPT MINUS}\N{SUPERSCRIPT ONE}', u.m / u.s),
+    ('m\N{SUPERSCRIPT TWO}', u.m**2),
+    ('m\N{SUPERSCRIPT PLUS SIGN}\N{SUPERSCRIPT TWO}', u.m**2),
+    ('m\N{SUPERSCRIPT THREE}', u.m**3),
+    ('m\N{SUPERSCRIPT ONE}\N{SUPERSCRIPT ZERO}', u.m**10),
+    ('\N{GREEK CAPITAL LETTER OMEGA}', u.ohm),
+    ('\N{OHM SIGN}', u.ohm), # deprecated but for compatibility
+    ('\N{MICRO SIGN}\N{GREEK CAPITAL LETTER OMEGA}', u.microOhm),
+    ('\N{ANGSTROM SIGN}', u.Angstrom),
+    ('\N{ANGSTROM SIGN} \N{OHM SIGN}', u.Angstrom * u.Ohm),
+    ('\N{LATIN CAPITAL LETTER A WITH RING ABOVE}', u.Angstrom),
+    ('\N{LATIN CAPITAL LETTER A}\N{COMBINING RING ABOVE}', u.Angstrom),
+    ('°C', u.deg_C),
+    ('°', u.deg),
+])
+def test_unicode(string, unit):
+    assert u_format.Generic.parse(string) == unit
+    assert u.Unit(string) == unit
+
+
+@pytest.mark.parametrize('string', [
+    'g\N{MICRO SIGN}',
+    'g\N{MINUS SIGN}',
+    'm\N{SUPERSCRIPT MINUS}1',
+    'm+\N{SUPERSCRIPT ONE}',
+    'm\N{MINUS SIGN}\N{SUPERSCRIPT ONE}',
+    'm\N{ANGSTROM SIGN}',
+])
+def test_unicode_failures(string):
+    with pytest.raises(ValueError):
+        u.Unit(string)

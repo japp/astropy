@@ -149,6 +149,15 @@ class CCDData(NDDataArray):
         This method uses :func:`fits_ccddata_writer` with the provided
         parameters.
 
+    Attributes
+    ----------
+    known_invalid_fits_unit_strings
+        A dictionary that maps commonly-used fits unit name strings that are
+        technically invalid to the correct valid unit type (or unit string).
+        This is primarily for variant names like "ELECTRONS/S" which are not
+        formally valid, but are unambiguous and frequently enough encountered
+        that it is convenient to map them to the correct unit.
+
     Notes
     -----
     `~astropy.nddata.CCDData` objects can be easily converted to a regular
@@ -179,11 +188,29 @@ class CCDData(NDDataArray):
             raise ValueError("can't have both header and meta.")
 
         super().__init__(*args, **kwd)
+        if self._wcs is not None:
+            llwcs = self._wcs.low_level_wcs
+            if not isinstance(llwcs, WCS):
+                raise TypeError("the wcs must be a WCS instance.")
+            self._wcs = llwcs
 
         # Check if a unit is set. This can be temporarly disabled by the
         # _CCDDataUnit contextmanager.
         if _config_ccd_requires_unit and self.unit is None:
             raise ValueError("a unit for CCDData must be specified.")
+
+    def _slice_wcs(self, item):
+        """
+        Override the WCS slicing behaviour so that the wcs attribute continues
+        to be an `astropy.wcs.WCS`.
+        """
+        if self.wcs is None:
+            return None
+
+        try:
+            return self.wcs[item]
+        except Exception as err:
+            self._handle_wcs_slicing_error(err, item)
 
     @property
     def data(self):
@@ -199,6 +226,8 @@ class CCDData(NDDataArray):
 
     @wcs.setter
     def wcs(self, value):
+        if not isinstance(value, WCS):
+            raise TypeError("the wcs must be a WCS instance.")
         self._wcs = value
 
     @property
@@ -409,6 +438,11 @@ class CCDData(NDDataArray):
         else:
             self.meta[key] = value
 
+    # A dictionary mapping "known" invalid fits unit
+    known_invalid_fits_unit_strings = {'ELECTRONS/S': u.electron/u.s,
+                                       'ELECTRONS': u.electron,
+                                       'electrons': u.electron}
+
 
 # These need to be importable by the tests...
 _KEEP_THESE_KEYWORDS_IN_HEADER = [
@@ -608,6 +642,9 @@ def fits_ccddata_reader(filename, hdu=0, unit=None, hdu_uncertainty='UNCERT',
                 # Convert the BUNIT header keyword to a unit and if that's not
                 # possible raise a meaningful error message.
                 try:
+                    kifus = CCDData.known_invalid_fits_unit_strings
+                    if fits_unit_string in kifus:
+                        fits_unit_string = kifus[fits_unit_string]
                     fits_unit_string = u.Unit(fits_unit_string)
                 except ValueError:
                     raise ValueError(

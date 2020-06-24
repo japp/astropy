@@ -12,11 +12,13 @@ import numpy as np
 from matplotlib.ticker import Formatter
 from matplotlib.transforms import Affine2D, ScaledTranslation
 from matplotlib.patches import PathPatch
+from matplotlib.path import Path
 from matplotlib import rcParams
 
 from astropy import units as u
 from astropy.utils.exceptions import AstropyDeprecationWarning
 
+from .frame import RectangularFrame1D, EllipticalFrame
 from .formatter_locator import AngleFormatterLocator, ScalarFormatterLocator
 from .ticks import Ticks
 from .ticklabels import TickLabels
@@ -79,7 +81,7 @@ class CoordinateHelper:
 
     def __init__(self, parent_axes=None, parent_map=None, transform=None,
                  coord_index=None, coord_type='scalar', coord_unit=None,
-                 coord_wrap=None, frame=None, format_unit=None):
+                 coord_wrap=None, frame=None, format_unit=None, default_label=None):
 
         # Keep a reference to the parent axes and the transform
         self.parent_axes = parent_axes
@@ -87,8 +89,14 @@ class CoordinateHelper:
         self.transform = transform
         self.coord_index = coord_index
         self.coord_unit = coord_unit
-        self.format_unit = format_unit
+        self._format_unit = format_unit
         self.frame = frame
+        self.default_label = default_label or ''
+        self._auto_axislabel = True
+        # Disable auto label for elliptical frames as it puts labels in
+        # annoying places.
+        if issubclass(self.parent_axes.frame_class, EllipticalFrame):
+            self._auto_axislabel = False
 
         self.set_coord_type(coord_type, coord_wrap)
 
@@ -199,7 +207,7 @@ class CoordinateHelper:
             else:
                 self._coord_scale_to_deg = self.coord_unit.to(u.deg)
             self._formatter_locator = AngleFormatterLocator(unit=self.coord_unit,
-                                                            format_unit=self.format_unit)
+                                                            format_unit=self._format_unit)
         else:
             raise ValueError("coord_type should be one of 'scalar', 'longitude', or 'latitude'")
 
@@ -290,6 +298,12 @@ class CoordinateHelper:
         self._formatter_locator.format_unit = u.Unit(unit)
         self._formatter_locator.decimal = decimal
         self._formatter_locator.show_decimal_unit = show_decimal_unit
+
+    def get_format_unit(self):
+        """
+        Get the unit for the major tick labels.
+        """
+        return self._formatter_locator.format_unit
 
     def set_ticks(self, values=None, spacing=None, number=None, size=None,
                   width=None, color=None, alpha=None, direction=None,
@@ -448,7 +462,6 @@ class CoordinateHelper:
             can include keywords to set the ``color``, ``size``, ``weight``, and
             other text properties.
         """
-
         fontdict = kwargs.pop('fontdict', None)
 
         # NOTE: When using plt.xlabel/plt.ylabel, minpad can get set explicitly
@@ -474,6 +487,36 @@ class CoordinateHelper:
             The axis label
         """
         return self.axislabels.get_text()
+
+    def set_auto_axislabel(self, auto_label):
+        """
+        Render default axis labels if no explicit label is provided.
+
+        Parameters
+        ----------
+        auto_label : `bool`
+            `True` if default labels will be rendered.
+        """
+        self._auto_axislabel = bool(auto_label)
+
+    def get_auto_axislabel(self):
+        """
+        Render default axis labels if no explicit label is provided.
+
+        Returns
+        -------
+        auto_axislabel : `bool`
+            `True` if default labels will be rendered.
+        """
+        return self._auto_axislabel
+
+    def _get_default_axislabel(self):
+        unit = self.get_format_unit() or self.coord_unit
+
+        if not unit or unit is u.one or self.coord_type in ('longitude', 'latitude'):
+            return f"{self.default_label}"
+        else:
+            return f"{self.default_label} [{unit:latex}]"
 
     def set_axislabel_position(self, position):
         """
@@ -524,11 +567,13 @@ class CoordinateHelper:
         self._update_ticks()
 
         if self.grid_lines_kwargs['visible']:
-
-            if self._grid_type == 'lines':
-                self._update_grid_lines()
+            if isinstance(self.frame, RectangularFrame1D):
+                self._update_grid_lines_1d()
             else:
-                self._update_grid_contour()
+                if self._grid_type == 'lines':
+                    self._update_grid_lines()
+                else:
+                    self._update_grid_contour()
 
             if self._grid_type == 'lines':
 
@@ -558,6 +603,9 @@ class CoordinateHelper:
         renderer.close_group('ticks')
 
     def _draw_axislabels(self, renderer, bboxes, ticklabels_bbox, ticks_locs, visible_ticks):
+        # Render the default axis label if no axis label is set.
+        if self._auto_axislabel and not self.get_axislabel():
+            self.set_axislabel(self._get_default_axislabel())
 
         renderer.open_group('axis labels')
 
@@ -602,59 +650,64 @@ class CoordinateHelper:
         # Look up parent axes' transform from data to figure coordinates.
         #
         # See:
-        # http://matplotlib.org/users/transforms_tutorial.html#the-transformation-pipeline
+        # https://matplotlib.org/users/transforms_tutorial.html#the-transformation-pipeline
         transData = self.parent_axes.transData
         invertedTransLimits = transData.inverted()
 
         for axis, spine in frame.items():
 
-            # Determine tick rotation in display coordinates and compare to
-            # the normal angle in display coordinates.
+            if not isinstance(self.frame, RectangularFrame1D):
+                # Determine tick rotation in display coordinates and compare to
+                # the normal angle in display coordinates.
 
-            pixel0 = spine.data
-            world0 = spine.world[:, self.coord_index]
-            with np.errstate(invalid='ignore'):
-                world0 = self.transform.transform(pixel0)[:, self.coord_index]
-            axes0 = transData.transform(pixel0)
+                pixel0 = spine.data
+                world0 = spine.world[:, self.coord_index]
+                with np.errstate(invalid='ignore'):
+                    world0 = self.transform.transform(pixel0)[:, self.coord_index]
+                axes0 = transData.transform(pixel0)
 
-            # Advance 2 pixels in figure coordinates
-            pixel1 = axes0.copy()
-            pixel1[:, 0] += 2.0
-            pixel1 = invertedTransLimits.transform(pixel1)
-            with np.errstate(invalid='ignore'):
-                world1 = self.transform.transform(pixel1)[:, self.coord_index]
+                # Advance 2 pixels in figure coordinates
+                pixel1 = axes0.copy()
+                pixel1[:, 0] += 2.0
+                pixel1 = invertedTransLimits.transform(pixel1)
+                with np.errstate(invalid='ignore'):
+                    world1 = self.transform.transform(pixel1)[:, self.coord_index]
 
-            # Advance 2 pixels in figure coordinates
-            pixel2 = axes0.copy()
-            pixel2[:, 1] += 2.0 if self.frame.origin == 'lower' else -2.0
-            pixel2 = invertedTransLimits.transform(pixel2)
-            with np.errstate(invalid='ignore'):
-                world2 = self.transform.transform(pixel2)[:, self.coord_index]
+                # Advance 2 pixels in figure coordinates
+                pixel2 = axes0.copy()
+                pixel2[:, 1] += 2.0 if self.frame.origin == 'lower' else -2.0
+                pixel2 = invertedTransLimits.transform(pixel2)
+                with np.errstate(invalid='ignore'):
+                    world2 = self.transform.transform(pixel2)[:, self.coord_index]
 
-            dx = (world1 - world0)
-            dy = (world2 - world0)
+                dx = (world1 - world0)
+                dy = (world2 - world0)
 
-            # Rotate by 90 degrees
-            dx, dy = -dy, dx
+                # Rotate by 90 degrees
+                dx, dy = -dy, dx
 
-            if self.coord_type == 'longitude':
+                if self.coord_type == 'longitude':
 
-                if self._coord_scale_to_deg is not None:
-                    dx *= self._coord_scale_to_deg
-                    dy *= self._coord_scale_to_deg
+                    if self._coord_scale_to_deg is not None:
+                        dx *= self._coord_scale_to_deg
+                        dy *= self._coord_scale_to_deg
 
-                # Here we wrap at 180 not self.coord_wrap since we want to
-                # always ensure abs(dx) < 180 and abs(dy) < 180
-                dx = wrap_angle_at(dx, 180.)
-                dy = wrap_angle_at(dy, 180.)
+                    # Here we wrap at 180 not self.coord_wrap since we want to
+                    # always ensure abs(dx) < 180 and abs(dy) < 180
+                    dx = wrap_angle_at(dx, 180.)
+                    dy = wrap_angle_at(dy, 180.)
 
-            tick_angle = np.degrees(np.arctan2(dy, dx))
+                tick_angle = np.degrees(np.arctan2(dy, dx))
 
-            normal_angle_full = np.hstack([spine.normal_angle, spine.normal_angle[-1]])
-            with np.errstate(invalid='ignore'):
-                reset = (((normal_angle_full - tick_angle) % 360 > 90.) &
-                         ((tick_angle - normal_angle_full) % 360 > 90.))
-            tick_angle[reset] -= 180.
+                normal_angle_full = np.hstack([spine.normal_angle, spine.normal_angle[-1]])
+                with np.errstate(invalid='ignore'):
+                    reset = (((normal_angle_full - tick_angle) % 360 > 90.) &
+                            ((tick_angle - normal_angle_full) % 360 > 90.))
+                tick_angle[reset] -= 180.
+
+            else:
+                rotation = 90 if axis == 'b' else -90
+                tick_angle = np.zeros((conf.frame_boundary_samples,)) + rotation
 
             # We find for each interval the starting and ending coordinate,
             # ensuring that we take wrapping into account correctly for
@@ -802,6 +855,19 @@ class CoordinateHelper:
         """
         self.minor_frequency = frequency
 
+    def _update_grid_lines_1d(self):
+        if self.coord_index is None:
+            return
+
+        x_ticks_pos = [a[0] for a in self.ticks.pixel['b']]
+
+        ymin, ymax = self.parent_axes.get_ylim()
+
+        self.grid_lines = []
+        for x_coord in x_ticks_pos:
+            pixel = [[x_coord, ymin], [x_coord, ymax]]
+            self.grid_lines.append(Path(pixel))
+
     def _update_grid_lines(self):
 
         # For 3-d WCS with a correlated third axis, the *proper* way of
@@ -828,6 +894,7 @@ class CoordinateHelper:
         xy_world = np.zeros((n_samples * n_coord, 2))
 
         self.grid_lines = []
+
         for iw, w in enumerate(tick_world_coordinates_values):
             subset = slice(iw * n_samples, (iw + 1) * n_samples)
             if self.coord_index == 0:
@@ -954,7 +1021,7 @@ class CoordinateHelper:
             Transparency of grid lines: 0 (transparent) to 1 (opaque).
         grid_linewidth : float, optional
             Width of grid lines in points.
-        grid_linestyle : string, optional
+        grid_linestyle : str, optional
             The style of the grid lines (accepts any valid Matplotlib line
             style).
         """

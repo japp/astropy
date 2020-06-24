@@ -52,10 +52,12 @@ Explanation of keywords of the dictionaries:
 
 from astropy.modeling.functional_models import (
     Gaussian1D, Sine1D, Box1D, Linear1D, Lorentz1D,
-    MexicanHat1D, Trapezoid1D, Const1D, Moffat1D,
-    Gaussian2D, Const2D, Box2D, MexicanHat2D,
+    RickerWavelet1D, Trapezoid1D, Const1D, Moffat1D,
+    Gaussian2D, Const2D, Box2D, RickerWavelet2D,
     TrapezoidDisk2D, AiryDisk2D, Moffat2D, Disk2D,
-    Ring2D, Sersic1D, Sersic2D, Voigt1D, Planar2D, KingProjectedAnalytic1D)
+    Ring2D, Sersic1D, Sersic2D, Voigt1D, Planar2D, KingProjectedAnalytic1D,
+    Exponential1D, Logarithmic1D)
+from astropy.modeling.physical_models import Drude1D, Plummer1D
 from astropy.modeling.polynomial import Polynomial1D, Polynomial2D
 from astropy.modeling.powerlaws import (
     PowerLaw1D, BrokenPowerLaw1D, SmoothlyBrokenPowerLaw1D, ExponentialCutoffPowerLaw1D,
@@ -104,7 +106,7 @@ models_1D = {
         'integral': 1
     },
 
-    MexicanHat1D: {
+    RickerWavelet1D: {
         'parameters': [1, 0, 1],
         'x_values': [0, 1, -1, 3, -3],
         'y_values': [1.0, 0.0, 0.0, -0.088872, -0.088872],
@@ -216,6 +218,37 @@ models_1D = {
         'y_values': [0.30557281, 0.30011069, 0.2, 0.1113258],
         'x_lim': [0, 10],
         'y_lim': [0, 10],
+    },
+
+    Drude1D: {
+        'parameters': [1.0, 8.0, 1.0],
+        'x_values': [7.0, 8.0, 9.0, 10.0],
+        'y_values': [0.17883212, 1.0, 0.21891892, 0.07163324],
+        'x_lim': [1.0, 20.0],
+        'y_lim': [0.0, 10.0]
+    },
+
+    Plummer1D: {
+        'parameters': [10., 0.5],
+        'x_values': [1.0000e-03, 2.5005e+00, 5.0000e+00],
+        'y_values': [1.90984022e+01, 5.53541843e-03, 1.86293603e-04],
+        'x_lim': [0.001, 100]
+    },
+
+    Exponential1D: {
+        'parameters': [1, 1],
+        'x_values': [0, 0.5, 1],
+        'y_values': [1, np.sqrt(np.e), np.e],
+        'x_lim': [0, 2],
+        'integral': (np.e**2 - 1.),
+    },
+
+    Logarithmic1D: {
+        'parameters': [1, 1],
+        'x_values': [1, np.e, np.e**2],
+        'y_values': [0, 1, 2],
+        'x_lim': [1, np.e**2],
+        'integral': (np.e**2 + 1),
     }
 }
 
@@ -255,7 +288,7 @@ models_2D = {
         'integral': 100
     },
 
-    MexicanHat2D: {
+    RickerWavelet2D: {
         'parameters': [1, 0, 0, 1],
         'x_values': [0, 0, 0, 0, 0, 1, -1, 3, -3],
         'y_values': [0, 1, -1, 3, -3, 0, 0, 0, 0],

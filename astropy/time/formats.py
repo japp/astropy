@@ -1,31 +1,34 @@
 # -*- coding: utf-8 -*-
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
-
 import fnmatch
 import time
 import re
 import datetime
 import warnings
+from decimal import Decimal
 from collections import OrderedDict, defaultdict
 
 import numpy as np
 
-from astropy.utils.decorators import lazyproperty
+from astropy.utils.decorators import lazyproperty, classproperty
 from astropy.utils.exceptions import AstropyDeprecationWarning
 from astropy import units as u
 from astropy import _erfa as erfa
+
+from . import utils
 from .utils import day_frac, quantity_day_frac, two_sum, two_product
 
 
 __all__ = ['TimeFormat', 'TimeJD', 'TimeMJD', 'TimeFromEpoch', 'TimeUnix',
-           'TimeCxcSec', 'TimeGPS', 'TimeDecimalYear',
+           'TimeUnixTai', 'TimeCxcSec', 'TimeGPS', 'TimeDecimalYear',
            'TimePlotDate', 'TimeUnique', 'TimeDatetime', 'TimeString',
            'TimeISO', 'TimeISOT', 'TimeFITS', 'TimeYearDayTime',
            'TimeEpochDate', 'TimeBesselianEpoch', 'TimeJulianEpoch',
            'TimeDeltaFormat', 'TimeDeltaSec', 'TimeDeltaJD',
            'TimeEpochDateString', 'TimeBesselianEpochString',
            'TimeJulianEpochString', 'TIME_FORMATS', 'TIME_DELTA_FORMATS',
-           'TimezoneInfo', 'TimeDeltaDatetime', 'TimeDatetime64']
+           'TimezoneInfo', 'TimeDeltaDatetime', 'TimeDatetime64', 'TimeYMDHMS',
+           'TimeNumeric', 'TimeDeltaNumeric']
 
 __doctest_skip__ = ['TimePlotDate']
 
@@ -54,18 +57,19 @@ def _regexify_subfmts(subfmts):
     new_subfmts = []
     for subfmt_tuple in subfmts:
         subfmt_in = subfmt_tuple[1]
-        for strptime_code, regex in (('%Y', r'(?P<year>\d\d\d\d)'),
-                                     ('%m', r'(?P<mon>\d{1,2})'),
-                                     ('%d', r'(?P<mday>\d{1,2})'),
-                                     ('%H', r'(?P<hour>\d{1,2})'),
-                                     ('%M', r'(?P<min>\d{1,2})'),
-                                     ('%S', r'(?P<sec>\d{1,2})')):
-            subfmt_in = subfmt_in.replace(strptime_code, regex)
+        if isinstance(subfmt_in, str):
+            for strptime_code, regex in (('%Y', r'(?P<year>\d\d\d\d)'),
+                                         ('%m', r'(?P<mon>\d{1,2})'),
+                                         ('%d', r'(?P<mday>\d{1,2})'),
+                                         ('%H', r'(?P<hour>\d{1,2})'),
+                                         ('%M', r'(?P<min>\d{1,2})'),
+                                         ('%S', r'(?P<sec>\d{1,2})')):
+                subfmt_in = subfmt_in.replace(strptime_code, regex)
 
-        if '%' not in subfmt_in:
-            subfmt_tuple = (subfmt_tuple[0],
-                            re.compile(subfmt_in + '$'),
-                            subfmt_tuple[2])
+            if '%' not in subfmt_in:
+                subfmt_tuple = (subfmt_tuple[0],
+                                re.compile(subfmt_in + '$'),
+                                subfmt_tuple[2])
         new_subfmts.append(subfmt_tuple)
 
     return tuple(new_subfmts)
@@ -86,6 +90,13 @@ class TimeFormatMeta(type):
         # it is not a user-accessible format and is only used for initialization into
         # a different format.
         if 'name' in members and cls.name != 'astropy_time':
+            # FIXME: check here that we're not introducing a collision with
+            # an existing method or attribute; problem is it could be either
+            # astropy.time.Time or astropy.time.TimeDelta, and at the point
+            # where this is run neither of those classes have necessarily been
+            # constructed yet.
+            if 'value' in members and not hasattr(members['value'], "fget"):
+                raise ValueError("If defined, 'value' must be a property")
             mcls._registry[cls.name] = cls
 
         if 'subfmts' in members:
@@ -118,6 +129,7 @@ class TimeFormat(metaclass=TimeFormatMeta):
     """
 
     _default_scale = 'utc'  # As of astropy 0.4
+    subfmts = ()
 
     def __init__(self, val1, val2, scale, precision,
                  in_subfmt, out_subfmt, from_jd=False):
@@ -126,12 +138,68 @@ class TimeFormat(metaclass=TimeFormatMeta):
         self.in_subfmt = in_subfmt
         self.out_subfmt = out_subfmt
 
+        self._jd1, self._jd2 = None, None
+
         if from_jd:
             self.jd1 = val1
             self.jd2 = val2
         else:
             val1, val2 = self._check_val_type(val1, val2)
             self.set_jds(val1, val2)
+
+    @classmethod
+    def _get_allowed_subfmt(cls, subfmt):
+        """Get an allowed subfmt for this class, either the input ``subfmt``
+        if this is valid or '*' as a default.  This method gets used in situations
+        where the format of an existing Time object is changing and so the
+        out_ or in_subfmt may need to be coerced to the default '*' if that
+        ``subfmt`` is no longer valid.
+        """
+        try:
+            cls._select_subfmts(subfmt)
+        except ValueError:
+            subfmt = '*'
+        return subfmt
+
+    @property
+    def in_subfmt(self):
+        return self._in_subfmt
+
+    @in_subfmt.setter
+    def in_subfmt(self, subfmt):
+        # Validate subfmt value for this class, raises ValueError if not.
+        self._select_subfmts(subfmt)
+        self._in_subfmt = subfmt
+
+    @property
+    def out_subfmt(self):
+        return self._out_subfmt
+
+    @out_subfmt.setter
+    def out_subfmt(self, subfmt):
+        # Validate subfmt value for this class, raises ValueError if not.
+        self._select_subfmts(subfmt)
+        self._out_subfmt = subfmt
+
+    @property
+    def jd1(self):
+        return self._jd1
+
+    @jd1.setter
+    def jd1(self, jd1):
+        self._jd1 = _validate_jd_for_storage(jd1)
+        if self._jd2 is not None:
+            self._jd1, self._jd2 = _broadcast_writeable(self._jd1, self._jd2)
+
+    @property
+    def jd2(self):
+        return self._jd2
+
+    @jd2.setter
+    def jd2(self, jd2):
+        self._jd2 = _validate_jd_for_storage(jd2)
+        if self._jd1 is not None:
+            self._jd1, self._jd2 = _broadcast_writeable(self._jd1, self._jd2)
 
     def __len__(self):
         return len(self.jd1)
@@ -179,10 +247,16 @@ class TimeFormat(metaclass=TimeFormatMeta):
     def _check_val_type(self, val1, val2):
         """Input value validation, typically overridden by derived classes"""
         # val1 cannot contain nan, but val2 can contain nan
-        ok1 = (val1.dtype == np.double and np.all(np.isfinite(val1)) or
-               val1.size == 0)
-        ok2 = val2 is None or (val2.dtype == np.double and
-                               not np.any(np.isinf(val2))) or val2.size == 0
+        isfinite1 = np.isfinite(val1)
+        if val1.size > 1:  # Calling .all() on a scalar is surprisingly slow
+            isfinite1 = isfinite1.all()  # Note: arr.all() about 3x faster than np.all(arr)
+        elif val1.size == 0:
+            isfinite1 = False
+        ok1 = (val1.dtype.kind == 'f' and val1.dtype.itemsize >= 8
+               and isfinite1 or val1.size == 0)
+        ok2 = val2 is None or (
+            val2.dtype.kind == 'f' and val2.dtype.itemsize >= 8
+            and not np.any(np.isinf(val2))) or val2.size == 0
         if not (ok1 and ok2):
             raise TypeError('Input values for {} class must be finite doubles'
                             .format(self.name))
@@ -217,7 +291,7 @@ class TimeFormat(metaclass=TimeFormatMeta):
             raise TypeError('Cannot mix float and Quantity inputs')
 
         if val2 is None:
-            val2 = np.zeros_like(val1)
+            val2 = np.array(0, dtype=val1.dtype)
 
         def asarray_or_scalar(val):
             """
@@ -258,22 +332,154 @@ class TimeFormat(metaclass=TimeFormatMeta):
         """
         raise NotImplementedError
 
-    def to_value(self, parent=None):
+    def to_value(self, parent=None, out_subfmt=None):
         """
-        Return time representation from internal jd1 and jd2.  This is
-        the base method that ignores ``parent`` and requires that
-        subclasses implement the ``value`` property.  Subclasses that
-        require ``parent`` or have other optional args for ``to_value``
-        should compute and return the value directly.
+        Return time representation from internal jd1 and jd2 in specified
+        ``out_subfmt``.
+
+        This is the base method that ignores ``parent`` and uses the ``value``
+        property to compute the output. This is done by temporarily setting
+        ``self.out_subfmt`` and calling ``self.value``. This is required for
+        legacy Format subclasses prior to astropy 4.0  New code should instead
+        implement the value functionality in ``to_value()`` and then make the
+        ``value`` property be a simple call to ``self.to_value()``.
+
+        Parameters
+        ----------
+        parent : obj
+            Parent `~astropy.time.Time` object associated with this
+            `~astropy.time.TimeFormat` object
+        out_subfmt : str or `None`
+            Output subformt (use existing self.out_subfmt if `None`)
+
+        Returns
+        -------
+        value : numpy.array, numpy.ma.array
+            Array or masked array of formatted time representation values
         """
-        return self.mask_if_needed(self.value)
+        # Get value via ``value`` property, overriding out_subfmt temporarily if needed.
+        if out_subfmt is not None:
+            out_subfmt_orig = self.out_subfmt
+            try:
+                self.out_subfmt = out_subfmt
+                value = self.value
+            finally:
+                self.out_subfmt = out_subfmt_orig
+        else:
+            value = self.value
+
+        return self.mask_if_needed(value)
 
     @property
     def value(self):
         raise NotImplementedError
 
+    @classmethod
+    def _select_subfmts(cls, pattern):
+        """
+        Return a list of subformats where name matches ``pattern`` using
+        fnmatch.
 
-class TimeJD(TimeFormat):
+        If no subformat matches pattern then a ValueError is raised.  A special
+        case is a format with no allowed subformats, i.e. subfmts=(), and
+        pattern='*'.  This is OK and happens when this method is used for
+        validation of an out_subfmt.
+        """
+        if not isinstance(pattern, str):
+            raise ValueError('subfmt attribute must be a string')
+
+        subfmts = [x for x in cls.subfmts if fnmatch.fnmatchcase(x[0], pattern)]
+        if len(subfmts) == 0 and pattern != '*':
+            if len(cls.subfmts) == 0:
+                raise ValueError(f'subformat not allowed for format {cls.name}')
+            else:
+                subfmt_names = [x[0] for x in cls.subfmts]
+                raise ValueError(f'subformat {pattern!r} must match one of '
+                                 f'{subfmt_names} for format {cls.name}')
+
+        return subfmts
+
+
+class TimeNumeric(TimeFormat):
+    subfmts = (
+        ('float', np.float64, None, np.add),
+        ('long', np.longdouble, utils.longdouble_to_twoval,
+         utils.twoval_to_longdouble),
+        ('decimal', np.object_, utils.decimal_to_twoval,
+         utils.twoval_to_decimal),
+        ('str', np.str_, utils.decimal_to_twoval, utils.twoval_to_string),
+        ('bytes', np.bytes_, utils.bytes_to_twoval, utils.twoval_to_bytes),
+    )
+
+    def _check_val_type(self, val1, val2):
+        """Input value validation, typically overridden by derived classes"""
+        # Save original state of val2 because the super()._check_val_type below
+        # may change val2 from None to np.array(0). The value is saved in order
+        # to prevent a useless and slow call to np.result_type() below in the
+        # most common use-case of providing only val1.
+        orig_val2_is_none = val2 is None
+
+        if val1.dtype.kind == 'f':
+            val1, val2 = super()._check_val_type(val1, val2)
+        elif (not orig_val2_is_none
+              or not (val1.dtype.kind in 'US'
+                      or (val1.dtype.kind == 'O'
+                          and all(isinstance(v, Decimal) for v in val1.flat)))):
+            raise TypeError(
+                'for {} class, input should be doubles, string, or Decimal, '
+                'and second values are only allowed for doubles.'
+                .format(self.name))
+
+        val_dtype = (val1.dtype if orig_val2_is_none else
+                     np.result_type(val1.dtype, val2.dtype))
+        subfmts = self._select_subfmts(self.in_subfmt)
+        for subfmt, dtype, convert, _ in subfmts:
+            if np.issubdtype(val_dtype, dtype):
+                break
+        else:
+            raise ValueError('input type not among selected sub-formats.')
+
+        if convert is not None:
+            try:
+                val1, val2 = convert(val1, val2)
+            except Exception:
+                raise TypeError(
+                    'for {} class, input should be (long) doubles, string, '
+                    'or Decimal, and second values are only allowed for '
+                    '(long) doubles.'.format(self.name))
+
+        return val1, val2
+
+    def to_value(self, jd1=None, jd2=None, parent=None, out_subfmt=None):
+        """
+        Return time representation from internal jd1 and jd2.
+        Subclasses that require ``parent`` or to adjust the jds should
+        override this method.
+        """
+        # TODO: do this in metaclass.
+        if self.__class__.value.fget is not self.__class__.to_value:
+            return self.value
+
+        if jd1 is None:
+            jd1 = self.jd1
+        if jd2 is None:
+            jd2 = self.jd2
+        if out_subfmt is None:
+            out_subfmt = self.out_subfmt
+        subfmt = self._select_subfmts(out_subfmt)[0]
+        kwargs = {}
+        if subfmt[0] in ('str', 'bytes'):
+            unit = getattr(self, 'unit', 1)
+            digits = int(np.ceil(np.log10(unit / np.finfo(float).eps)))
+            # TODO: allow a way to override the format.
+            kwargs['fmt'] = f'.{digits}f'
+        value = subfmt[3](jd1, jd2, **kwargs)
+        return self.mask_if_needed(value)
+
+    value = property(to_value)
+
+
+class TimeJD(TimeNumeric):
     """
     Julian Date time format.
     This represents the number of days since the beginning of
@@ -286,12 +492,8 @@ class TimeJD(TimeFormat):
         self._check_scale(self._scale)  # Validate scale.
         self.jd1, self.jd2 = day_frac(val1, val2)
 
-    @property
-    def value(self):
-        return self.jd1 + self.jd2
 
-
-class TimeMJD(TimeFormat):
+class TimeMJD(TimeNumeric):
     """
     Modified Julian Date time format.
     This represents the number of days since midnight on November 17, 1858.
@@ -300,21 +502,20 @@ class TimeMJD(TimeFormat):
     name = 'mjd'
 
     def set_jds(self, val1, val2):
-        # TODO - this routine and vals should be Cythonized to follow the ERFA
-        # convention of preserving precision by adding to the larger of the two
-        # values in a vectorized operation.  But in most practical cases the
-        # first one is probably biggest.
         self._check_scale(self._scale)  # Validate scale.
         jd1, jd2 = day_frac(val1, val2)
-        jd1 += erfa.DJM0  # erfa.DJM0=2400000.5 (from erfam.h)
+        jd1 += erfa.DJM0  # erfa.DJM0=2400000.5 (from erfam.h).
         self.jd1, self.jd2 = day_frac(jd1, jd2)
 
-    @property
-    def value(self):
-        return (self.jd1 - erfa.DJM0) + self.jd2
+    def to_value(self, **kwargs):
+        jd1 = self.jd1 - erfa.DJM0  # This cannot lose precision.
+        jd2 = self.jd2
+        return super().to_value(jd1=jd1, jd2=jd2, **kwargs)
+
+    value = property(to_value)
 
 
-class TimeDecimalYear(TimeFormat):
+class TimeDecimalYear(TimeNumeric):
     """
     Time as a decimal year, with integer values corresponding to midnight
     of the first day of each year.  For example 2000.5 corresponds to the
@@ -353,8 +554,7 @@ class TimeDecimalYear(TimeFormat):
 
         self.jd1, self.jd2 = day_frac(t_frac.jd1, t_frac.jd2)
 
-    @property
-    def value(self):
+    def to_value(self, **kwargs):
         scale = self.scale.upper().encode('ascii')
         iy_start, ims, ids, ihmsfs = erfa.d2dtf(scale, 0,  # precision=0
                                                 self.jd1, self.jd2_filled)
@@ -371,32 +571,35 @@ class TimeDecimalYear(TimeFormat):
                                           ihr, imin, isec)
         jd1_end, jd2_end = erfa.dtf2d(scale, iy_start + 1, imon, iday,
                                       ihr, imin, isec)
-
+        # Trying to be precise, but more than float64 not useful.
         dt = (self.jd1 - jd1_start) + (self.jd2 - jd2_start)
         dt_end = (jd1_end - jd1_start) + (jd2_end - jd2_start)
         decimalyear = iy_start + dt / dt_end
 
-        return decimalyear
+        return super().to_value(jd1=decimalyear, jd2=np.float64(0.0), **kwargs)
+
+    value = property(to_value)
 
 
-class TimeFromEpoch(TimeFormat):
+class TimeFromEpoch(TimeNumeric):
     """
     Base class for times that represent the interval from a particular
     epoch as a floating point multiple of a unit time interval (e.g. seconds
     or days).
     """
 
-    def __init__(self, val1, val2, scale, precision,
-                 in_subfmt, out_subfmt, from_jd=False):
-        self.scale = scale
-        # Initialize the reference epoch (a single time defined in subclasses)
-        epoch = Time(self.epoch_val, self.epoch_val2, scale=self.epoch_scale,
-                     format=self.epoch_format)
-        self.epoch = epoch
+    @classproperty(lazy=True)
+    def _epoch(cls):
+        # Ideally we would use `def epoch(cls)` here and not have the instance
+        # property below. However, this breaks the sphinx API docs generation
+        # in a way that was not resolved. See #10406 for details.
+        return Time(cls.epoch_val, cls.epoch_val2, scale=cls.epoch_scale,
+                    format=cls.epoch_format)
 
-        # Now create the TimeFormat object as normal
-        super().__init__(val1, val2, scale, precision, in_subfmt, out_subfmt,
-                         from_jd)
+    @property
+    def epoch(self):
+        """Reference epoch time from which the time interval is measured"""
+        return self._epoch
 
     def set_jds(self, val1, val2):
         """
@@ -420,6 +623,19 @@ class TimeFromEpoch(TimeFormat):
         jd1 = self.epoch.jd1 + day
         jd2 = self.epoch.jd2 + frac
 
+        # For the usual case that scale is the same as epoch_scale, we only need
+        # to ensure that abs(jd2) <= 0.5. Since abs(self.epoch.jd2) <= 0.5 and
+        # abs(frac) <= 0.5, we can do simple (fast) checks and arithmetic here
+        # without another call to day_frac(). Note also that `round(jd2.item())`
+        # is about 10x faster than `np.round(jd2)`` for a scalar.
+        if self.epoch.scale == self.scale:
+            jd1_extra = np.round(jd2) if jd2.shape else round(jd2.item())
+            jd1 += jd1_extra
+            jd2 -= jd1_extra
+
+            self.jd1, self.jd2 = jd1, jd2
+            return
+
         # Create a temporary Time object corresponding to the new (jd1, jd2) in
         # the epoch scale (e.g. UTC for TimeUnix) then convert that to the
         # desired time scale for this object.
@@ -433,11 +649,11 @@ class TimeFromEpoch(TimeFormat):
             raise ScaleValueError("Cannot convert from '{}' epoch scale '{}'"
                                   "to specified scale '{}', got error:\n{}"
                                   .format(self.name, self.epoch_scale,
-                                          self.scale, err))
+                                          self.scale, err)) from err
 
         self.jd1, self.jd2 = day_frac(tm._time.jd1, tm._time.jd2)
 
-    def to_value(self, parent=None):
+    def to_value(self, parent=None, **kwargs):
         # Make sure that scale is the same as epoch scale so we can just
         # subtract the epoch and convert
         if self.scale != self.epoch_scale:
@@ -449,16 +665,19 @@ class TimeFromEpoch(TimeFormat):
                 raise ScaleValueError("Cannot convert from '{}' epoch scale '{}'"
                                       "to specified scale '{}', got error:\n{}"
                                       .format(self.name, self.epoch_scale,
-                                              self.scale, err))
+                                              self.scale, err)) from err
 
             jd1, jd2 = tm._time.jd1, tm._time.jd2
         else:
             jd1, jd2 = self.jd1, self.jd2
 
-        time_from_epoch = ((jd1 - self.epoch.jd1) +
-                           (jd2 - self.epoch.jd2)) / self.unit
+        # This factor is guaranteed to be exactly representable, which
+        # means time_from_epoch1 is calculated exactly.
+        factor = 1. / self.unit
+        time_from_epoch1 = (jd1 - self.epoch.jd1) * factor
+        time_from_epoch2 = (jd2 - self.epoch.jd2) * factor
 
-        return self.mask_if_needed(time_from_epoch)
+        return super().to_value(jd1=time_from_epoch1, jd2=time_from_epoch2, **kwargs)
 
     value = property(to_value)
 
@@ -469,7 +688,8 @@ class TimeFromEpoch(TimeFormat):
 
 class TimeUnix(TimeFromEpoch):
     """
-    Unix time: seconds from 1970-01-01 00:00:00 UTC.
+    Unix time: seconds from 1970-01-01 00:00:00 UTC, ignoring leap seconds.
+
     For example, 946684800.0 in Unix time is midnight on January 1, 2000.
 
     NOTE: this quantity is not exactly unix time and differs from the strict
@@ -484,6 +704,43 @@ class TimeUnix(TimeFromEpoch):
     epoch_val2 = None
     epoch_scale = 'utc'
     epoch_format = 'iso'
+
+
+class TimeUnixTai(TimeUnix):
+    """
+    Seconds from 1970-01-01 00:00:08 TAI (see notes), including leap seconds.
+
+    This will generally differ from Unix time by the cumulative integral number
+    of leap seconds since 1970-01-01 UTC.  This convention matches the definition
+    for linux CLOCK_TAI (https://www.cl.cam.ac.uk/~mgk25/posix-clocks.html).
+
+    Caveats:
+
+    - Before 1972, fractional adjustments to UTC were made, so the difference
+      between ``unix`` and ``unix_tai`` time is no longer an integer.
+    - Because of the fractional adjustments, to be very precise, ``unix_tai``
+      is the number of seconds since ``1970-01-01 00:00:08 TAI`` or equivalently
+      ``1969-12-31 23:59:59.999918 UTC``.  The difference between TAI and UTC
+      at that epoch was 8.000082 sec.
+    - On the day of a leap second the difference between ``unix`` and ``unix_tai``
+      times increases linearly through the day by 1.0.  See also the
+      documentation for the `~astropy.time.TimeUnix` class.
+
+    Examples
+    --------
+
+      >>> from astropy.time import Time
+      >>> t = Time('2020-01-01', scale='utc')
+      >>> t.unix_tai - t.unix
+      29.0
+
+      >>> t = Time('1970-01-01', scale='utc')
+      >>> t.unix_tai - t.unix  # doctest: +FLOAT_CMP
+      8.200000198854696e-05
+    """
+    name = 'unix_tai'
+    epoch_val = '1970-01-01 00:00:08'
+    epoch_scale = 'tai'
 
 
 class TimeCxcSec(TimeFromEpoch):
@@ -510,7 +767,7 @@ class TimeGPS(TimeFromEpoch):
     considered as a time scale which is ahead of TAI by a fixed offset
     (to within about 100 nanoseconds).
 
-    For details, see http://tycho.usno.navy.mil/gpstt.html
+    For details, see https://www.usno.navy.mil/USNO/time/gps/usno-gps-time-transfer
     """
     name = 'gps'
     unit = 1.0 / erfa.DAYSEC  # in days (1 day == 86400 seconds)
@@ -548,6 +805,20 @@ class TimePlotDate(TimeFromEpoch):
     epoch_format = 'jd'
 
 
+class TimeStardate(TimeFromEpoch):
+    """
+    Stardate: date units from 2318-07-05 12:00:00 UTC.
+    For example, stardate 41153.7 is 00:52 on April 30, 2363.
+    See http://trekguide.com/Stardates.htm#TNG for calculations and reference points
+    """
+    name = 'stardate'
+    unit = 0.397766856  # Stardate units per day
+    epoch_val = '2318-07-05 11:00:00'  # Date and time of stardate 00000.00
+    epoch_val2 = None
+    epoch_scale = 'tai'
+    epoch_format = 'iso'
+
+
 class TimeUnique(TimeFormat):
     """
     Base class for time formats that can uniquely create a time object
@@ -579,17 +850,46 @@ class TimeAstropyTime(TimeUnique):
 
         if scale is None:
             scale = val1_0.scale
+
         if val1.shape:
             vals = [getattr(val, scale)._time for val in val1]
             jd1 = np.concatenate([np.atleast_1d(val.jd1) for val in vals])
             jd2 = np.concatenate([np.atleast_1d(val.jd2) for val in vals])
+
+            # Collect individual location values and merge into a single location.
+            if any(tm.location is not None for tm in val1):
+                if any(tm.location is None for tm in val1):
+                    raise ValueError('cannot concatenate times unless all locations '
+                                     'are set or no locations are set')
+                locations = []
+                for tm in val1:
+                    location = np.broadcast_to(tm.location, tm._time.jd1.shape,
+                                               subok=True)
+                    locations.append(np.atleast_1d(location))
+
+                # Once we no longer have to support NUMPY_LT_1_17, we can
+                # just write np.concatenate(locations).  Right now, we
+                # effectively do what __array_function__ does directly.
+                location0 = locations[0]
+                unit = location0.unit
+                location = np.concatenate([location.to_value(unit)
+                                           for location in locations])
+                location = location0._new_view(location)
+
+            else:
+                location = None
         else:
             val = getattr(val1_0, scale)._time
             jd1, jd2 = val.jd1, val.jd2
+            location = val1_0.location
 
         OutTimeFormat = val1_0._time.__class__
         self = OutTimeFormat(jd1, jd2, scale, precision, in_subfmt, out_subfmt,
                              from_jd=True)
+
+        # Make a temporary hidden attribute to transfer location back to the
+        # parent Time object where it needs to live.
+        self._location = location
 
         return self
 
@@ -611,10 +911,12 @@ class TimeDatetime(TimeUnique):
     name = 'datetime'
 
     def _check_val_type(self, val1, val2):
-        # Note: don't care about val2 for this class
         if not all(isinstance(val, datetime.datetime) for val in val1.flat):
             raise TypeError('Input values for {} class must be '
                             'datetime objects'.format(self.name))
+        if val2 is not None:
+            raise ValueError(
+                f'{self.name} objects do not accept a val2 but you provided {val2}')
         return val1, None
 
     def set_jds(self, val1, val2):
@@ -640,7 +942,7 @@ class TimeDatetime(TimeUnique):
                               *iterator.operands[1:])
         self.jd1, self.jd2 = day_frac(jd1, jd2)
 
-    def to_value(self, timezone=None, parent=None):
+    def to_value(self, timezone=None, parent=None, out_subfmt=None):
         """
         Convert to (potentially timezone-aware) `~datetime.datetime` object.
 
@@ -649,7 +951,7 @@ class TimeDatetime(TimeUnique):
 
         Parameters
         ----------
-        timezone : {`~datetime.tzinfo`, None} (optional)
+        timezone : {`~datetime.tzinfo`, None}, optional
             If not `None`, return timezone-aware datetime.
 
         Returns
@@ -657,6 +959,11 @@ class TimeDatetime(TimeUnique):
         `~datetime.datetime`
             If ``timezone`` is not ``None``, output will be timezone-aware.
         """
+        if out_subfmt is not None:
+            # Out_subfmt not allowed for this format, so raise the standard
+            # exception by trying to validate the value.
+            self._select_subfmts(out_subfmt)
+
         if timezone is not None:
             if self._scale != 'utc':
                 raise ScaleValueError("scale is {}, must be 'utc' when timezone "
@@ -691,6 +998,144 @@ class TimeDatetime(TimeUnique):
     value = property(to_value)
 
 
+class TimeYMDHMS(TimeUnique):
+    """
+    ymdhms: A Time format to represent Time as year, month, day, hour,
+    minute, second (thus the name ymdhms).
+
+    Acceptable inputs must have keys or column names in the "YMDHMS" set of
+    ``year``, ``month``, ``day`` ``hour``, ``minute``, ``second``:
+
+    - Dict with keys in the YMDHMS set
+    - NumPy structured array, record array or astropy Table, or single row
+      of those types, with column names in the YMDHMS set
+
+    One can supply a subset of the YMDHMS values, for instance only 'year',
+    'month', and 'day'.  Inputs have the following defaults::
+
+      'month': 1, 'day': 1, 'hour': 0, 'minute': 0, 'second': 0
+
+    When the input is supplied as a ``dict`` then each value can be either a
+    scalar value or an array.  The values will be broadcast to a common shape.
+
+    Example::
+
+      >>> from astropy.time import Time
+      >>> t = Time({'year': 2015, 'month': 2, 'day': 3,
+      ...           'hour': 12, 'minute': 13, 'second': 14.567},
+      ...           scale='utc')
+      >>> t.iso
+      '2015-02-03 12:13:14.567'
+      >>> t.ymdhms.year
+      2015
+    """
+    name = 'ymdhms'
+
+    def _check_val_type(self, val1, val2):
+        """
+        This checks inputs for the YMDHMS format.
+
+        It is bit more complex than most format checkers because of the flexible
+        input that is allowed.  Also, it actually coerces ``val1`` into an appropriate
+        dict of ndarrays that can be used easily by ``set_jds()``.  This is useful
+        because it makes it easy to get default values in that routine.
+
+        Parameters
+        ----------
+        val1 : ndarray or None
+        val2 : ndarray or None
+
+        Returns
+        -------
+        val1_as_dict, val2 : val1 as dict or None, val2 is always None
+
+        """
+        if val2 is not None:
+            raise ValueError('val2 must be None for ymdhms format')
+
+        ymdhms = ['year', 'month', 'day', 'hour', 'minute', 'second']
+
+        if val1.dtype.names:
+            # Convert to a dict of ndarray
+            val1_as_dict = {name: val1[name] for name in val1.dtype.names}
+
+        elif val1.shape == (0,):
+            # Input was empty list [], so set to None and set_jds will handle this
+            return None, None
+
+        elif (val1.dtype.kind == 'O'
+              and val1.shape == ()
+              and isinstance(val1.item(), dict)):
+            # Code gets here for input as a dict.  The dict input
+            # can be either scalar values or N-d arrays.
+
+            # Extract the item (which is a dict) and broadcast values to the
+            # same shape here.
+            names = val1.item().keys()
+            values = val1.item().values()
+            val1_as_dict = {name: value for name, value
+                            in zip(names, np.broadcast_arrays(*values))}
+
+        else:
+            raise ValueError('input must be dict or table-like')
+
+        # Check that the key names now are good.
+        names = val1_as_dict.keys()
+        required_names = ymdhms[:len(names)]
+
+        def comma_repr(vals):
+            return ', '.join(repr(val) for val in vals)
+
+        bad_names = set(names) - set(ymdhms)
+        if bad_names:
+            raise ValueError(f'{comma_repr(bad_names)} not allowed as YMDHMS key name(s)')
+
+        if set(names) != set(required_names):
+            raise ValueError(f'for {len(names)} input key names '
+                             f'you must supply {comma_repr(required_names)}')
+
+        return val1_as_dict, val2
+
+    def set_jds(self, val1, val2):
+        if val1 is None:
+            # Input was empty list []
+            jd1 = np.array([], dtype=np.float64)
+            jd2 = np.array([], dtype=np.float64)
+
+        else:
+            jd1, jd2 = erfa.dtf2d(self.scale.upper().encode('ascii'),
+                                  val1['year'],
+                                  val1.get('month', 1),
+                                  val1.get('day', 1),
+                                  val1.get('hour', 0),
+                                  val1.get('minute', 0),
+                                  val1.get('second', 0))
+
+        self.jd1, self.jd2 = day_frac(jd1, jd2)
+
+    @property
+    def value(self):
+        scale = self.scale.upper().encode('ascii')
+        iys, ims, ids, ihmsfs = erfa.d2dtf(scale, 9,
+                                           self.jd1, self.jd2_filled)
+
+        out = np.empty(self.jd1.shape, dtype=[('year', 'i4'),
+                                              ('month', 'i4'),
+                                              ('day', 'i4'),
+                                              ('hour', 'i4'),
+                                              ('minute', 'i4'),
+                                              ('second', 'f8')])
+        out['year'] = iys
+        out['month'] = ims
+        out['day'] = ids
+        out['hour'] = ihmsfs['h']
+        out['minute'] = ihmsfs['m']
+        out['second'] = ihmsfs['s'] + ihmsfs['f'] * 10**(-9)
+        out = out.view(np.recarray)
+
+        return self.mask_if_needed(out)
+
+
 class TimezoneInfo(datetime.tzinfo):
     """
     Subclass of the `~datetime.tzinfo` object, used in the
@@ -701,16 +1146,16 @@ class TimezoneInfo(datetime.tzinfo):
     a workaround for users without pytz.
     """
     @u.quantity_input(utc_offset=u.day, dst=u.day)
-    def __init__(self, utc_offset=0*u.day, dst=0*u.day, tzname=None):
+    def __init__(self, utc_offset=0 * u.day, dst=0 * u.day, tzname=None):
         """
         Parameters
         ----------
-        utc_offset : `~astropy.units.Quantity` (optional)
+        utc_offset : `~astropy.units.Quantity`, optional
             Offset from UTC in days. Defaults to zero.
-        dst : `~astropy.units.Quantity` (optional)
+        dst : `~astropy.units.Quantity`, optional
             Daylight Savings Time offset in days. Defaults to zero
             (no daylight savings).
-        tzname : string, `None` (optional)
+        tzname : str or `None`, optional
             Name of timezone
 
         Examples
@@ -753,10 +1198,12 @@ class TimeString(TimeUnique):
     """
 
     def _check_val_type(self, val1, val2):
-        # Note: don't care about val2 for these classes
         if val1.dtype.kind not in ('S', 'U') and val1.size:
             raise TypeError('Input values for {} class must be strings'
                             .format(self.name))
+        if val2 is not None:
+            raise ValueError(
+                f'{self.name} objects do not accept a val2 but you provided {val2}')
         return val1, None
 
     def parse_string(self, timestr, subfmts):
@@ -811,7 +1258,7 @@ class TimeString(TimeUnique):
                      lambda x: str(x.item(), encoding='ascii'))
         iterator = np.nditer([val1, None, None, None, None, None, None],
                              flags=['zerosize_ok'],
-                             op_dtypes=[None] + 5*[np.intc] + [np.double])
+                             op_dtypes=[None] + 5 * [np.intc] + [np.double])
         for val, iy, im, id, ihr, imin, dsec in iterator:
             val = to_string(val)
             iy[...], im[...], id[...], ihr[...], imin[...], dsec[...] = (
@@ -879,18 +1326,6 @@ class TimeString(TimeUnique):
             outs.append(str(self.format_string(str_fmt, **kwargs)))
 
         return np.array(outs).reshape(self.jd1.shape)
-
-    def _select_subfmts(self, pattern):
-        """
-        Return a list of subformats where name matches ``pattern`` using
-        fnmatch.
-        """
-
-        fnmatchcase = fnmatch.fnmatchcase
-        subfmts = [x for x in self.subfmts if fnmatchcase(x[0], pattern)]
-        if len(subfmts) == 0:
-            raise ValueError(f'No subformats match {pattern}')
-        return subfmts
 
 
 class TimeISO(TimeString):
@@ -982,13 +1417,15 @@ class TimeDatetime64(TimeISOT):
     name = 'datetime64'
 
     def _check_val_type(self, val1, val2):
-        # Note: don't care about val2 for this class`
         if not val1.dtype.kind == 'M':
             if val1.size > 0:
                 raise TypeError('Input values for {} class must be '
                                 'datetime64 objects'.format(self.name))
             else:
                 val1 = np.array([], 'datetime64[D]')
+        if val2 is not None:
+            raise ValueError(
+                f'{self.name} objects do not accept a val2 but you provided {val2}')
 
         return val1, None
 
@@ -1112,7 +1549,7 @@ class TimeFITS(TimeString):
         return super().value
 
 
-class TimeEpochDate(TimeFormat):
+class TimeEpochDate(TimeNumeric):
     """
     Base class for support floating point Besselian and Julian epoch dates
     """
@@ -1124,10 +1561,12 @@ class TimeEpochDate(TimeFormat):
         jd1, jd2 = epoch_to_jd(val1 + val2)
         self.jd1, self.jd2 = day_frac(jd1, jd2)
 
-    @property
-    def value(self):
+    def to_value(self, **kwargs):
         jd_to_epoch = getattr(erfa, self.jd_to_epoch)
-        return jd_to_epoch(self.jd1, self.jd2)
+        value = jd_to_epoch(self.jd1, self.jd2)
+        return super().to_value(jd1=value, jd2=np.float64(0.0), **kwargs)
+
+    value = property(to_value)
 
 
 class TimeBesselianEpoch(TimeEpochDate):
@@ -1142,7 +1581,7 @@ class TimeBesselianEpoch(TimeEpochDate):
             raise ValueError("Cannot use Quantities for 'byear' format, "
                              "as the interpretation would be ambiguous. "
                              "Use float with Besselian year instead. ")
-
+        # FIXME: is val2 really okay here?
         return super()._check_val_type(val1, val2)
 
 
@@ -1230,22 +1669,31 @@ class TimeDeltaFormat(TimeFormat, metaclass=TimeDeltaFormatMeta):
 
         return scale
 
+
+class TimeDeltaNumeric(TimeDeltaFormat, TimeNumeric):
+
     def set_jds(self, val1, val2):
         self._check_scale(self._scale)  # Validate scale.
-        self.jd1, self.jd2 = day_frac(val1, val2, divisor=1./self.unit)
+        self.jd1, self.jd2 = day_frac(val1, val2, divisor=1. / self.unit)
 
-    @property
-    def value(self):
-        return (self.jd1 + self.jd2) / self.unit
+    def to_value(self, **kwargs):
+        # Note that 1/unit is always exactly representable, so the
+        # following multiplications are exact.
+        factor = 1. / self.unit
+        jd1 = self.jd1 * factor
+        jd2 = self.jd2 * factor
+        return super().to_value(jd1=jd1, jd2=jd2, **kwargs)
+
+    value = property(to_value)
 
 
-class TimeDeltaSec(TimeDeltaFormat):
+class TimeDeltaSec(TimeDeltaNumeric):
     """Time delta in SI seconds"""
     name = 'sec'
     unit = 1. / erfa.DAYSEC  # for quantity input
 
 
-class TimeDeltaJD(TimeDeltaFormat):
+class TimeDeltaJD(TimeDeltaNumeric):
     """Time delta in Julian days (86400 SI seconds)"""
     name = 'jd'
     unit = 1.
@@ -1256,34 +1704,80 @@ class TimeDeltaDatetime(TimeDeltaFormat, TimeUnique):
     name = 'datetime'
 
     def _check_val_type(self, val1, val2):
-        # Note: don't care about val2 for this class
         if not all(isinstance(val, datetime.timedelta) for val in val1.flat):
             raise TypeError('Input values for {} class must be '
                             'datetime.timedelta objects'.format(self.name))
+        if val2 is not None:
+            raise ValueError(
+                f'{self.name} objects do not accept a val2 but you provided {val2}')
         return val1, None
 
     def set_jds(self, val1, val2):
         self._check_scale(self._scale)  # Validate scale.
-        iterator = np.nditer([val1, None],
+        iterator = np.nditer([val1, None, None],
                              flags=['refs_ok', 'zerosize_ok'],
-                             op_dtypes=[None] + [np.double])
+                             op_dtypes=[None, np.double, np.double])
 
-        for val, sec in iterator:
-            sec[...] = val.item().total_seconds()
+        day = datetime.timedelta(days=1)
+        for val, jd1, jd2 in iterator:
+            jd1[...], other = divmod(val.item(), day)
+            jd2[...] = other / day
 
-        self.jd1, self.jd2 = day_frac(iterator.operands[-1], 0.0,
-                                      divisor=erfa.DAYSEC)
+        self.jd1, self.jd2 = day_frac(iterator.operands[-2],
+                                      iterator.operands[-1])
 
     @property
     def value(self):
-        iterator = np.nditer([self.jd1 + self.jd2, None],
+        iterator = np.nditer([self.jd1, self.jd2, None],
                              flags=['refs_ok', 'zerosize_ok'],
-                             op_dtypes=[None] + [object])
+                             op_dtypes=[None, None, object])
 
-        for jd, out in iterator:
-            out[...] = datetime.timedelta(days=jd.item())
+        for jd1, jd2, out in iterator:
+            jd1_, jd2_ = day_frac(jd1, jd2)
+            out[...] = datetime.timedelta(days=jd1_,
+                                          microseconds=jd2_ * 86400 * 1e6)
 
         return self.mask_if_needed(iterator.operands[-1])
 
 
-from .core import Time, TIME_SCALES, TIME_DELTA_SCALES, ScaleValueError
+def _validate_jd_for_storage(jd):
+    if isinstance(jd, (float, int)):
+        return np.array(jd, dtype=np.float_)
+    if (isinstance(jd, np.generic)
+        and (jd.dtype.kind == 'f' and jd.dtype.itemsize <= 8
+             or jd.dtype.kind in 'iu')):
+        return np.array(jd, dtype=np.float_)
+    elif (isinstance(jd, np.ndarray)
+          and jd.dtype.kind == 'f'
+          and jd.dtype.itemsize == 8):
+        return jd
+    else:
+        raise TypeError(
+            f"JD values must be arrays (possibly zero-dimensional) "
+            f"of floats but we got {jd!r} of type {type(jd)}")
+
+
+def _broadcast_writeable(jd1, jd2):
+    if jd1.shape == jd2.shape:
+        return jd1, jd2
+    # When using broadcast_arrays, *both* are flagged with
+    # warn-on-write, even the one that wasn't modified, and
+    # require "C" only clears the flag if it actually copied
+    # anything.
+    shape = np.broadcast(jd1, jd2).shape
+    if jd1.shape == shape:
+        s_jd1 = jd1
+    else:
+        s_jd1 = np.require(np.broadcast_to(jd1, shape),
+                           requirements=["C", "W"])
+    if jd2.shape == shape:
+        s_jd2 = jd2
+    else:
+        s_jd2 = np.require(np.broadcast_to(jd2, shape),
+                           requirements=["C", "W"])
+    return s_jd1, s_jd2
+
+
+# Import symbols from core.py that are used in this module. This succeeds
+# because __init__.py imports format.py just before core.py.
+from .core import Time, TIME_SCALES, TIME_DELTA_SCALES, ScaleValueError  # noqa

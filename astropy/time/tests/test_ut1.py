@@ -20,10 +20,36 @@ else:
     HAS_IERS_A = True
 
 
-class TestTimeUT1:
-    """Test Time.ut1 using IERS tables"""
+def do_ut1_prediction_tst(iers_type):
+    tnow = Time.now()
+    iers_tab = iers_type.open()
+    tnow.delta_ut1_utc, status = iers_tab.ut1_utc(tnow, return_status=True)
+    assert status == iers.FROM_IERS_A_PREDICTION
+    tnow_ut1_jd = tnow.ut1.jd
+    assert tnow_ut1_jd != tnow.jd
 
-    @pytest.mark.remote_data
+    delta_ut1_utc = tnow.delta_ut1_utc
+    with iers.earth_orientation_table.set(iers_type.open()):
+        delta2, status2 = tnow.get_delta_ut1_utc(return_status=True)
+        assert status2 == status
+        assert delta2.to_value('s') == delta_ut1_utc
+
+        tnow_ut1 = tnow.ut1
+        assert tnow_ut1._delta_ut1_utc == delta_ut1_utc
+        assert tnow_ut1.jd != tnow.jd
+
+
+@pytest.mark.remote_data
+class TestTimeUT1Remote:
+    def setup_class(cls):
+        # Need auto_download so that IERS_B won't be loaded and cause tests to
+        # fail.
+        iers_conf.auto_download = True
+
+    def teardown_class(cls):
+        # This setting is to be consistent with astropy/conftest.py
+        iers_conf.auto_download = False
+
     def test_utc_to_ut1(self):
         "Test conversion of UTC to UT1, making sure to include a leap second"""
         t = Time(['2012-06-30 12:00:00', '2012-06-30 23:59:59',
@@ -42,6 +68,13 @@ class TestTimeUT1:
         tnow = Time.now()
 
         tnow.ut1
+
+    def test_ut1_iers_auto(self):
+        do_ut1_prediction_tst(iers.IERS_Auto)
+
+
+class TestTimeUT1:
+    """Test Time.ut1 using IERS tables"""
 
     def test_ut1_to_utc(self):
         """Also test the reverse, around the leap second
@@ -72,23 +105,20 @@ class TestTimeUT1:
             assert allclose_sec(t._delta_ut1_utc, -0.58682110003124965)
 
 
-@pytest.mark.skipif('not HAS_IERS_A')
-class TestTimeUT1_IERSA:
+class TestTimeUT1SpecificIERSTable:
+    @pytest.mark.skipif('not HAS_IERS_A')
     def test_ut1_iers_A(self):
-        tnow = Time.now()
-        iers_a = iers.IERS_A.open()
-        tnow.delta_ut1_utc, status = iers_a.ut1_utc(tnow, return_status=True)
-        assert status == iers.FROM_IERS_A_PREDICTION
-        tnow_ut1_jd = tnow.ut1.jd
-        assert tnow_ut1_jd != tnow.jd
+        do_ut1_prediction_tst(iers.IERS_A)
 
-
-@pytest.mark.remote_data
-class TestTimeUT1_IERS_Auto:
-    def test_ut1_iers_auto(self):
+    def test_ut1_iers_B(self):
         tnow = Time.now()
-        iers_a = iers.IERS_Auto.open()
-        tnow.delta_ut1_utc, status = iers_a.ut1_utc(tnow, return_status=True)
-        assert status == iers.FROM_IERS_A_PREDICTION
-        tnow_ut1_jd = tnow.ut1.jd
-        assert tnow_ut1_jd != tnow.jd
+        iers_b = iers.IERS_B.open()
+        delta1, status1 = tnow.get_delta_ut1_utc(iers_b, return_status=True)
+        assert status1 == iers.TIME_BEYOND_IERS_RANGE
+
+        with iers.earth_orientation_table.set(iers.IERS_B.open()):
+            delta2, status2 = tnow.get_delta_ut1_utc(return_status=True)
+            assert status2 == status1
+
+            with pytest.raises(iers.IERSRangeError):
+                tnow.ut1

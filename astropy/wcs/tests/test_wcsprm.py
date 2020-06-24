@@ -5,19 +5,22 @@
 import gc
 import locale
 import re
+from distutils.version import LooseVersion
 
 import pytest
 import numpy as np
-from numpy.testing import (assert_array_equal, assert_array_almost_equal,
-                           assert_allclose)
+from numpy.testing import assert_array_equal, assert_array_almost_equal
 
 from astropy.tests.helper import raises, catch_warnings
 from astropy.io import fits
 from astropy.wcs import wcs
 from astropy.wcs import _wcs
-from astropy.utils.data import get_pkg_data_contents, get_pkg_data_fileobj, get_pkg_data_filename
+from astropy.wcs.wcs import FITSFixedWarning
+from astropy.utils.data import (
+    get_pkg_data_contents, get_pkg_data_fileobj, get_pkg_data_filename)
+from astropy.utils.misc import _set_locale
 from astropy import units as u
-
+from astropy.units.core import UnitsWarning
 
 ######################################################################
 
@@ -332,7 +335,8 @@ def test_unit():
 
 def test_unit2():
     w = wcs.WCS()
-    myunit = u.Unit("FOOBAR", parse_strict="warn")
+    with pytest.warns(UnitsWarning):
+        myunit = u.Unit("FOOBAR", parse_strict="warn")
     w.wcs.cunit[0] = myunit
 
 
@@ -406,10 +410,12 @@ def test_fix():
         'spcfix': 'No change',
         'unitfix': 'No change',
         'celfix': 'No change',
-        'obsfix': 'No change',}
+        'obsfix': 'No change'}
     version = wcs._wcs.__version__
-    if version[0] <= "5":
+    if LooseVersion(version) <= '5':
         del fix_ref['obsfix']
+    if LooseVersion(version) >= '7.1':
+        w.dateref = '1858-11-17'
     assert w.fix() == fix_ref
 
 
@@ -420,14 +426,21 @@ def test_fix2():
         'cdfix': 'No change',
         'cylfix': 'No change',
         'obsfix': 'No change',
-        'datfix': "Set MJD-OBS to 51543.000000 from DATE-OBS.\nChanged DATE-OBS from '31/12/99' to '1999-12-31'",
+        'datfix': "Set MJD-OBS to 51543.000000 from DATE-OBS.\nChanged DATE-OBS from '31/12/99' to '1999-12-31'",  # noqa
         'spcfix': 'No change',
         'unitfix': 'No change',
         'celfix': 'No change'}
     version = wcs._wcs.__version__
-    if version[0] <= "5":
+    if LooseVersion(version) <= "5":
         del fix_ref['obsfix']
         fix_ref['datfix'] = "Changed '31/12/99' to '1999-12-31'"
+
+    if LooseVersion(version) >= '7.3':
+        fix_ref['datfix'] = "Set DATEREF to '1858-11-17' from MJDREF.\n" + fix_ref['datfix']
+
+    elif LooseVersion(version) >= '7.1':
+        fix_ref['datfix'] = "Set DATE-REF to '1858-11-17' from MJD-REF.\n" + fix_ref['datfix']
+
     assert w.fix() == fix_ref
     assert w.dateobs == '1999-12-31'
     assert w.mjdobs == 51543.0
@@ -443,11 +456,19 @@ def test_fix3():
         'datfix': "Invalid DATE-OBS format '31/12/F9'",
         'spcfix': 'No change',
         'unitfix': 'No change',
-        'celfix': 'No change'}
+        'celfix': 'No change'
+    }
+
     version = wcs._wcs.__version__
-    if version[0] <= "5":
+    if LooseVersion(version) <= "5":
         del fix_ref['obsfix']
         fix_ref['datfix'] = "Invalid parameter value: invalid date '31/12/F9'"
+
+    if LooseVersion(version) >= '7.3':
+        fix_ref['datfix'] = "Set DATEREF to '1858-11-17' from MJDREF.\n" + fix_ref['datfix']
+    elif LooseVersion(version) >= '7.1':
+        fix_ref['datfix'] = "Set DATE-REF to '1858-11-17' from MJD-REF.\n" + fix_ref['datfix']
+
     assert w.fix() == fix_ref
     assert w.dateobs == '31/12/F9'
     assert np.isnan(w.mjdobs)
@@ -838,31 +859,23 @@ def test_header_parse():
     with get_pkg_data_fileobj(
             'data/header_newlines.fits', encoding='binary') as test_file:
         hdulist = fits.open(test_file)
-        w = wcs.WCS(hdulist[0].header)
+        with pytest.warns(FITSFixedWarning):
+            w = wcs.WCS(hdulist[0].header)
     assert w.wcs.ctype[0] == 'RA---TAN-SIP'
 
 
 def test_locale():
-    orig_locale = locale.getlocale(locale.LC_NUMERIC)[0]
-
     try:
-        locale.setlocale(locale.LC_NUMERIC, 'fr_FR')
+        with _set_locale('fr_FR'):
+            header = get_pkg_data_contents('data/locale.hdr',
+                                           encoding='binary')
+            with pytest.warns(FITSFixedWarning):
+                w = _wcs.Wcsprm(header)
+                assert re.search("[0-9]+,[0-9]*", w.to_header()) is None
     except locale.Error:
         pytest.xfail(
             "Can't set to 'fr_FR' locale, perhaps because it is not installed "
             "on this system")
-    try:
-        header = get_pkg_data_contents('data/locale.hdr', encoding='binary')
-        w = _wcs.Wcsprm(header)
-        assert re.search("[0-9]+,[0-9]*", w.to_header()) is None
-    finally:
-        if orig_locale is None:
-            # reset to the default setting
-            locale.resetlocale(locale.LC_NUMERIC)
-        else:
-            # restore to whatever the previous value had been set to for
-            # whatever reason
-            locale.setlocale(locale.LC_NUMERIC, orig_locale)
 
 
 @raises(UnicodeEncodeError)
@@ -876,7 +889,7 @@ def test_sub_segfault():
     header = fits.Header.fromtextfile(
         get_pkg_data_filename('data/sub-segfault.hdr'))
     w = wcs.WCS(header)
-    sub = w.sub([wcs.WCSSUB_CELESTIAL])
+    w.sub([wcs.WCSSUB_CELESTIAL])
     gc.collect()
 
 
@@ -918,11 +931,12 @@ def test_compare():
     w = _wcs.Wcsprm(header)
     w2 = _wcs.Wcsprm(header)
 
-    w.cdelt[0] = np.float32(0.00416666666666666666666666)
-    w2.cdelt[0] = np.float64(0.00416666666666666666666666)
+    with pytest.warns(RuntimeWarning):
+        w.cdelt[0] = np.float32(0.00416666666666666666666666)
+        w2.cdelt[0] = np.float64(0.00416666666666666666666666)
 
-    assert not w.compare(w2)
-    assert w.compare(w2, tolerance=1e-6)
+        assert not w.compare(w2)
+        assert w.compare(w2, tolerance=1e-6)
 
 
 def test_radesys_defaults():
@@ -1068,27 +1082,27 @@ def test_iteration():
 
 def test_invalid_args():
     with pytest.raises(TypeError):
-        w = _wcs.Wcsprm(keysel='A')
+        _wcs.Wcsprm(keysel='A')
 
     with pytest.raises(ValueError):
-        w = _wcs.Wcsprm(keysel=2)
+        _wcs.Wcsprm(keysel=2)
 
     with pytest.raises(ValueError):
-        w = _wcs.Wcsprm(colsel=2)
+        _wcs.Wcsprm(colsel=2)
 
     with pytest.raises(ValueError):
-        w = _wcs.Wcsprm(naxis=64)
+        _wcs.Wcsprm(naxis=64)
 
     header = get_pkg_data_contents(
         'data/spectra/orion-velo-1.hdr', encoding='binary')
     with pytest.raises(ValueError):
-        w = _wcs.Wcsprm(header, relax='FOO')
+        _wcs.Wcsprm(header, relax='FOO')
 
     with pytest.raises(ValueError):
-        w = _wcs.Wcsprm(header, naxis=3)
+        _wcs.Wcsprm(header, naxis=3)
 
     with pytest.raises(KeyError):
-        w = _wcs.Wcsprm(header, key='A')
+        _wcs.Wcsprm(header, key='A')
 
 
 # Test keywords in the Time standard
@@ -1108,6 +1122,12 @@ def test_datebeg():
         'spcfix': 'No change',
         'unitfix': 'No change',
         'celfix': 'No change'}
+
+    if LooseVersion(wcs._wcs.__version__) >= '7.3':
+        fix_ref['datfix'] = "Set DATEREF to '1858-11-17' from MJDREF.\n" + fix_ref['datfix']
+    elif LooseVersion(wcs._wcs.__version__) >= '7.1':
+        fix_ref['datfix'] = "Set DATE-REF to '1858-11-17' from MJD-REF.\n" + fix_ref['datfix']
+
     assert w.fix() == fix_ref
 
 
@@ -1143,14 +1163,14 @@ def test_num_keys(key):
         setattr(w, key, "foo")
 
 
-array_keys = ['czphs', 'cperi', 'mjdref']
-
-
-@pytest.mark.parametrize('key', array_keys)
+@pytest.mark.parametrize('key', ['czphs', 'cperi', 'mjdref'])
 def test_array_keys(key):
     w = _wcs.Wcsprm()
     attr = getattr(w, key)
-    assert np.all(np.isnan(attr))
+    if key == 'mjdref' and LooseVersion(_wcs.__version__) >= '7.1':
+        assert np.allclose(attr, [0, 0])
+    else:
+        assert np.all(np.isnan(attr))
     assert attr.dtype == float
     setattr(w, key, [1., 2.])
     assert_array_equal(getattr(w, key), [1., 2.])

@@ -4,11 +4,9 @@
 
 # Dependencies
 import numpy as np
-import warnings
 
 # Project
 from astropy import units as u
-from astropy.utils.exceptions import AstropyDeprecationWarning
 from astropy.utils import OrderedDescriptor, ShapedLikeNDArray
 
 __all__ = ['Attribute', 'TimeAttribute', 'QuantityAttribute',
@@ -105,7 +103,7 @@ class Attribute(OrderedDescriptor):
         out, converted = self.convert_input(out)
         if instance is not None:
             instance_shape = getattr(instance, 'shape', None)
-            if instance_shape is not None and (getattr(out, 'size', 1) > 1 and
+            if instance_shape is not None and (getattr(out, 'shape', ()) and
                                                out.shape != instance_shape):
                 # If the shapes do not match, try broadcasting.
                 try:
@@ -183,7 +181,7 @@ class TimeAttribute(Attribute):
             except Exception as err:
                 raise ValueError(
                     'Invalid time input {}={!r}\n{}'.format(self.name,
-                                                               value, err))
+                                                            value, err))
             converted = True
 
         # Set attribute as read-only for arrays (not allowed by numpy
@@ -263,10 +261,15 @@ class QuantityAttribute(Attribute):
     A frame attribute that is a quantity with specified units and shape
     (optionally).
 
+    Can be `None`, which should be used for special cases in associated
+    frame transformations like "this quantity should be ignored" or similar.
+
     Parameters
     ----------
-    default : object
-        Default value for the attribute if not provided
+    default : value or Quantity or None
+        Default value for the attribute if the user does not supply one. If a
+        Quantity, it must be consistent with ``unit``, or if a value, ``unit``
+        cannot be None.
     secondary_attribute : str
         Name of a secondary instance attribute which supplies the value if
         ``default is None`` and no value was supplied during initialization.
@@ -277,7 +280,17 @@ class QuantityAttribute(Attribute):
         If given, specifies the shape the attribute must be
     """
 
-    def __init__(self, default, secondary_attribute='', unit=None, shape=None):
+    def __init__(self, default=None, secondary_attribute='', unit=None,
+                 shape=None):
+
+        if default is None and unit is None:
+            raise ValueError('Either a default quantity value must be '
+                             'provided, or a unit must be provided to define a '
+                             'QuantityAttribute.')
+
+        if default is not None and unit is None:
+            unit = default.unit
+
         self.unit = unit
         self.shape = shape
         default = self.convert_input(default)[0]
@@ -304,24 +317,28 @@ class QuantityAttribute(Attribute):
         ValueError
             If the input is not valid for this attribute.
         """
-        if value is None:
-            raise TypeError('QuantityAttributes cannot be None, because None '
-                            'is not a Quantity')
 
-        if np.all(value == 0) and self.unit is not None:
-            return u.Quantity(np.zeros(self.shape), self.unit), True
-        else:
-            if not hasattr(value, 'unit') and self.unit != u.dimensionless_unscaled:
-                raise TypeError('Tried to set a QuantityAttribute with '
-                                'something that does not have a unit.')
-            oldvalue = value
-            value = u.Quantity(oldvalue, self.unit, copy=False)
-            if self.shape is not None and value.shape != self.shape:
-                raise ValueError('The provided value has shape "{}", but '
-                                 'should have shape "{}"'.format(value.shape,
-                                                                  self.shape))
-            converted = oldvalue is not value
-            return value, converted
+        if value is None:
+            return None, False
+
+        if (not hasattr(value, 'unit') and self.unit != u.dimensionless_unscaled
+                and np.any(value != 0)):
+            raise TypeError('Tried to set a QuantityAttribute with '
+                            'something that does not have a unit.')
+
+        oldvalue = value
+        value = u.Quantity(oldvalue, self.unit, copy=False)
+        if self.shape is not None and value.shape != self.shape:
+            if value.shape == () and oldvalue == 0:
+                # Allow a single 0 to fill whatever shape is needed.
+                value = np.broadcast_to(value, self.shape, subok=True)
+            else:
+                raise ValueError(
+                    f'The provided value has shape "{value.shape}", but '
+                    f'should have shape "{self.shape}"')
+
+        converted = oldvalue is not value
+        return value, converted
 
 
 class EarthLocationAttribute(Attribute):
@@ -485,49 +502,20 @@ class DifferentialAttribute(Attribute):
             If the input is not valid for this attribute.
         """
 
+        if value is None:
+            return None, False
+
         if not isinstance(value, self.allowed_classes):
-            raise TypeError('Tried to set a DifferentialAttribute with '
-                            'an unsupported Differential type {}. Allowed '
-                            'classes are: {}'
-                            .format(value.__class__,
-                                    self.allowed_classes))
+            if len(self.allowed_classes) == 1:
+                value = self.allowed_classes[0](value)
+            else:
+                raise TypeError('Tried to set a DifferentialAttribute with '
+                                'an unsupported Differential type {}. Allowed '
+                                'classes are: {}'
+                                .format(value.__class__,
+                                        self.allowed_classes))
 
         return value, True
-
-
-# Backwards-compatibility: these are the only classes that were previously
-# released in v1.3
-class FrameAttribute(Attribute):
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn("FrameAttribute has been renamed to Attribute.",
-                      AstropyDeprecationWarning)
-        super().__init__(*args, **kwargs)
-
-
-class TimeFrameAttribute(TimeAttribute):
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn("TimeFrameAttribute has been renamed to TimeAttribute.",
-                      AstropyDeprecationWarning)
-        super().__init__(*args, **kwargs)
-
-
-class QuantityFrameAttribute(QuantityAttribute):
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn("QuantityFrameAttribute has been renamed to "
-                      "QuantityAttribute.", AstropyDeprecationWarning)
-        super().__init__(*args, **kwargs)
-
-
-class CartesianRepresentationFrameAttribute(CartesianRepresentationAttribute):
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn("CartesianRepresentationFrameAttribute has been renamed "
-                      "to CartesianRepresentationAttribute.",
-                      AstropyDeprecationWarning)
-        super().__init__(*args, **kwargs)
 
 
 # do this here to prevent a series of complicated circular imports

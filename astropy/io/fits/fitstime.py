@@ -11,6 +11,7 @@ from . import Header, Card
 from astropy import units as u
 from astropy.coordinates import EarthLocation
 from astropy.table import Column
+from astropy.table.column import col_copy
 from astropy.time import Time, TimeDelta
 from astropy.time.core import BARYCENTRIC_SCALES
 from astropy.time.formats import FITS_DEPRECATED_SCALES
@@ -374,7 +375,7 @@ def _convert_time_column(col, column_info):
         # directly converted to Time, as they are absolute (relative
         # to a globally accepted zero point).
         if (column_info['ref_time']['val'] == 0 and
-            column_info['ref_time']['format'] in ['jd', 'mjd']):
+                column_info['ref_time']['format'] in ['jd', 'mjd']):
             # (jd1, jd2) where jd = jd1 + jd2
             if col.shape[-1] == 2 and col.ndim > 1:
                 return Time(col[..., 0], col[..., 1], scale=column_info['scale'],
@@ -500,9 +501,20 @@ def time_to_fits(table):
     hdr : `~astropy.io.fits.header.Header`
         Header containing global time reference frame FITS keywords
     """
-
-    # Shallow copy of the input table
-    newtable = table.copy(copy_data=False)
+    # Make a light copy of table (to the extent possible) and clear any indices along
+    # the way. Indices are not serialized and cause problems later, but they are not
+    # needed here so just drop.  For Column subclasses take advantage of copy() method,
+    # but for others it is required to actually copy the data if there are attached
+    # indices.  See #8077 and #9009 for further discussion.
+    new_cols = []
+    for col in table.itercols():
+        if isinstance(col, Column):
+            new_col = col.copy(copy_data=False)  # Also drops any indices
+        else:
+            new_col = col_copy(col, copy_indices=False) if col.info.indices else col
+        new_cols.append(new_col)
+    newtable = table.__class__(new_cols, copy=False)
+    newtable.meta = table.meta
 
     # Global time coordinate frame keywords
     hdr = Header([Card(keyword=key, value=val[0], comment=val[1])
@@ -533,8 +545,8 @@ def time_to_fits(table):
         jd12 = np.rollaxis(jd12, 0, jd12.ndim)
         newtable.replace_column(col.info.name, Column(jd12, unit='d'))
 
-        # Get column position(index)
-        n = table.colnames.index(col.info.name) + 1
+        # Get column position(index); FIXME: unused ?
+        # n = table.colnames.index(col.info.name) + 1
 
         # Time column-specific override keywords
         coord_meta[col.info.name]['coord_type'] = col.scale.upper()
@@ -554,7 +566,7 @@ def time_to_fits(table):
             # Compatibility of Time Scales and Reference Positions
             if col.scale in BARYCENTRIC_SCALES:
                 warnings.warn(
-                    'Earth Location "TOPOCENTER" for Time Column "{}" is incompatabile '
+                    'Earth Location "TOPOCENTER" for Time Column "{}" is incompatible '
                     'with scale "{}".'.format(col.info.name, col.scale.upper()),
                     AstropyUserWarning)
 

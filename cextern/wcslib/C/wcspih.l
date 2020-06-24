@@ -1,7 +1,7 @@
 /*============================================================================
 
-  WCSLIB 6.4 - an implementation of the FITS WCS standard.
-  Copyright (C) 1995-2019, Mark Calabretta
+  WCSLIB 7.3 - an implementation of the FITS WCS standard.
+  Copyright (C) 1995-2020, Mark Calabretta
 
   This file is part of WCSLIB.
 
@@ -22,7 +22,7 @@
 
   Author: Mark Calabretta, Australia Telescope National Facility, CSIRO.
   http://www.atnf.csiro.au/people/Mark.Calabretta
-  $Id: wcspih.l,v 6.4 2019/08/15 09:30:18 mcalabre Exp $
+  $Id: wcspih.l,v 7.3 2020/06/03 03:37:02 mcalabre Exp $
 *=============================================================================
 *
 * wcspih.l is a Flex description file containing the definition of a lexical
@@ -111,6 +111,7 @@ INLINE " "*(\/.*)?
 %{
 #include <math.h>
 #include <setjmp.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -190,10 +191,10 @@ static int  wcspih_nkeyrec;
 /* Internal helper functions. */
 static int wcspih_final(int ndp[], int ndq[], int distran, double dsstmp[],
              char *wat[], int *nwcs, struct wcsprm **wcs);
-static int wcspih_inits(int naxis, int alts[], int dpq[], int npv[],
-             int nps[], int ndp[], int ndq[], int distran, int *nwcs,
-	     struct wcsprm **wcs);
-static void wcspih_naxes(int naxis, int i, int j, char a, int distype,
+static int wcspih_init1(int naxis, int alts[], int dpq[], int npv[],
+             int nps[], int ndp[], int ndq[], int auxprm, int distran,
+             int *nwcs, struct wcsprm **wcs);
+static void wcspih_pass1(int naxis, int i, int j, char a, int distype,
              int alts[], int dpq[], int *npptr);
 
 static int wcspih_jdref(double *wptr,   const double *jdref);
@@ -217,12 +218,14 @@ jmp_buf wcspih_abort_jmp_env;
 	
 	char *cptr, *errmsg, errtxt[80], *hptr, *keep, *keyname, *keyrec,
 	     keyword[16], strtmp[80], *wat[2], *watstr;
-	int  altlin, alts[27], distran, distype, dpq[27], dssflag, gotone,
-	     ialt, inttmp, ipass, ipx, ix, jx, naxis, ndp[27], ndq[27],
-	     nother, *npptr, nps[27], npass, npv[27], nvalid, rectype,
-	     sipflag, status, valtype, voff, watflag, watn;
+	int  altlin, alts[27], auxprm, distran, distype, dpq[27], dssflag,
+	     gotone, ialt, inttmp, ipass, ipx, ix, jx, naux, naxis,
+	     ndp[27], ndq[27], nother, *npptr, nps[27], npass, npv[27],
+	     nvalid, rectype, sipflag, status, valtype, watflag, watn;
+	ptrdiff_t voff;
 	double dbltmp, dbl2tmp[2], dsstmp[20];
 	void *vptr, *wptr;
+	struct auxprm *auxp, auxtem;
 	struct disprm *disp, distem;
 	struct wcsprm *wcsp, wcstem;
 	int (*chekval)(double);
@@ -270,6 +273,8 @@ jmp_buf wcspih_abort_jmp_env;
 	npptr   = 0x0;
 	chekval = 0x0;
 	special = 0x0;
+	auxprm  = 0;
+	naux    = 0;
 	distran = 0;
 	sipflag = 0;
 	dssflag = 0;
@@ -477,7 +482,7 @@ jmp_buf wcspih_abort_jmp_env;
 	    errmsg = "the VELREF keyword is deprecated, use SPECSYSa";
 	    BEGIN(ERROR);
 	
-	  } else if (a == ' ' || relax & WCSHDR_VELREFa) {
+	  } else if ((a == ' ') || (relax & WCSHDR_VELREFa)) {
 	    valtype = INTEGER;
 	    vptr    = &(wcstem.velref);
 	
@@ -583,65 +588,135 @@ jmp_buf wcspih_abort_jmp_env;
 	  BEGIN(CCCCCCCC);
 	}
 
-^DATEREF" " {
-	  valtype = STRING;
-	  vptr    = wcstem.dateref;
+^DATEREF" " |
+^DATE-REF {
+	  if ((yytext[4] == 'R') || (relax & WCSHDR_DATEREF)) {
+	    valtype = STRING;
+	    vptr    = wcstem.dateref;
 	
-	  keyname = "DATEREF";
-	  BEGIN(CCCCCCCC);
+	    keyname = "DATEREF";
+	    BEGIN(CCCCCCCC);
+	
+	  } else if (relax & WCSHDR_reject) {
+	    errmsg = "the DATE-REF keyword is non-standard";
+	    BEGIN(ERROR);
+	
+	  } else {
+	    BEGIN(DISCARD);
+	  }
 	}
 
-^MJDREF"  " {
-	  valtype = FLOAT2;
-	  vptr    = wcstem.mjdref;
+^MJDREF"  " |
+^MJD-REF" " {
+	  if ((yytext[3] == 'R') || (relax & WCSHDR_DATEREF)) {
+	    valtype = FLOAT2;
+	    vptr    = wcstem.mjdref;
 	
-	  keyname = "MJDREF";
-	  BEGIN(CCCCCCCC);
+	    keyname = "MJDREF";
+	    BEGIN(CCCCCCCC);
+	
+	  } else if (relax & WCSHDR_reject) {
+	    errmsg = "the MJD-REF keyword is non-standard";
+	    BEGIN(ERROR);
+	
+	  } else {
+	    BEGIN(DISCARD);
+	  }
 	}
 
-^MJDREFI" " {
-	  /* Actually integer, but treated as float. */
-	  valtype = FLOAT;
-	  vptr    = wcstem.mjdref;
+^MJDREFI" " |
+^MJD-REFI {
+	  if ((yytext[3] == 'R') || (relax & WCSHDR_DATEREF)) {
+	    /* Actually integer, but treated as float. */
+	    valtype = FLOAT;
+	    vptr    = wcstem.mjdref;
 	
-	  keyname = "MJDREFI";
-	  BEGIN(CCCCCCCC);
+	    keyname = "MJDREFI";
+	    BEGIN(CCCCCCCC);
+	
+	  } else if (relax & WCSHDR_reject) {
+	    errmsg = "the MJD-REFI keyword is non-standard";
+	    BEGIN(ERROR);
+	
+	  } else {
+	    BEGIN(DISCARD);
+	  }
 	}
 
-^MJDREFF" " {
-	  valtype = FLOAT;
-	  vptr    = wcstem.mjdref + 1;
+^MJDREFF" " |
+^MJD-REFF {
+	  if ((yytext[3] == 'R') || (relax & WCSHDR_DATEREF)) {
+	    valtype = FLOAT;
+	    vptr    = wcstem.mjdref + 1;
 	
-	  keyname = "MJDREFF";
-	  BEGIN(CCCCCCCC);
+	    keyname = "MJDREFF";
+	    BEGIN(CCCCCCCC);
+	
+	  } else if (relax & WCSHDR_reject) {
+	    errmsg = "the MJD-REFF keyword is non-standard";
+	    BEGIN(ERROR);
+	
+	  } else {
+	    BEGIN(DISCARD);
+	  }
 	}
 
-^JDREF"   " {
-	  valtype = FLOAT2;
-	  vptr    = wcstem.mjdref;
-	  special = wcspih_jdref;
+^JDREF"   " |
+^JD-REF"  " {
+	  if ((yytext[2] == 'R') || (relax & WCSHDR_DATEREF)) {
+	    valtype = FLOAT2;
+	    vptr    = wcstem.mjdref;
+	    special = wcspih_jdref;
 	
-	  keyname = "JDREF";
-	  BEGIN(CCCCCCCC);
+	    keyname = "JDREF";
+	    BEGIN(CCCCCCCC);
+	
+	  } else if (relax & WCSHDR_reject) {
+	    errmsg = "the JD-REF keyword is non-standard";
+	    BEGIN(ERROR);
+	
+	  } else {
+	    BEGIN(DISCARD);
+	  }
 	}
 
-^JDREFI"  " {
-	  /* Actually integer, but treated as float. */
-	  valtype = FLOAT;
-	  vptr    = wcstem.mjdref;
-	  special = wcspih_jdrefi;
+^JDREFI"  " |
+^JD-REFI {
+	  if ((yytext[2] == 'R') || (relax & WCSHDR_DATEREF)) {
+	    /* Actually integer, but treated as float. */
+	    valtype = FLOAT;
+	    vptr    = wcstem.mjdref;
+	    special = wcspih_jdrefi;
 	
-	  keyname = "JDREFI";
-	  BEGIN(CCCCCCCC);
+	    keyname = "JDREFI";
+	    BEGIN(CCCCCCCC);
+	
+	  } else if (relax & WCSHDR_reject) {
+	    errmsg = "the JD-REFI keyword is non-standard";
+	    BEGIN(ERROR);
+	
+	  } else {
+	    BEGIN(DISCARD);
+	  }
 	}
 
-^JDREFF"  " {
-	  valtype = FLOAT;
-	  vptr    = wcstem.mjdref;
-	  special = wcspih_jdreff;
+^JDREFF"  " |
+^JD-REFF {
+	  if ((yytext[2] == 'R') || (relax & WCSHDR_DATEREF)) {
+	    valtype = FLOAT;
+	    vptr    = wcstem.mjdref;
+	    special = wcspih_jdreff;
 	
-	  keyname = "JDREFF";
-	  BEGIN(CCCCCCCC);
+	    keyname = "JDREFF";
+	    BEGIN(CCCCCCCC);
+	
+	  } else if (relax & WCSHDR_reject) {
+	    errmsg = "the JD-REFF keyword is non-standard";
+	    BEGIN(ERROR);
+	
+	  } else {
+	    BEGIN(DISCARD);
+	  }
 	}
 
 ^TIMEOFFS {
@@ -1004,6 +1079,52 @@ jmp_buf wcspih_abort_jmp_env;
 	
 	  keyname = "VELANGLa";
 	  BEGIN(CCCCCCCa);
+	}
+
+^RSUN_REF {
+	  valtype = FLOAT;
+	  auxprm  = 1;
+	  vptr    = &(auxtem.rsun_ref);
+	
+	  keyname = "RSUN_REF";
+	  BEGIN(CCCCCCCC);
+	}
+
+^DSUN_OBS {
+	  valtype = FLOAT;
+	  auxprm  = 1;
+	  vptr    = &(auxtem.dsun_obs);
+	
+	  keyname = "DSUN_OBS";
+	  BEGIN(CCCCCCCC);
+	}
+
+^CRLN_OBS {
+	  valtype = FLOAT;
+	  auxprm  = 1;
+	  vptr    = &(auxtem.crln_obs);
+	
+	  keyname = "CRLN_OBS";
+	  BEGIN(CCCCCCCC);
+	}
+
+^HGLN_OBS {
+	  valtype = FLOAT;
+	  auxprm  = 1;
+	  vptr    = &(auxtem.hgln_obs);
+	
+	  keyname = "HGLN_OBS";
+	  BEGIN(CCCCCCCC);
+	}
+
+^CRLT_OBS |
+^HGLT_OBS {
+	  valtype = FLOAT;
+	  auxprm  = 1;
+	  vptr    = &(auxtem.hglt_obs);
+	
+	  keyname = "HGLT_OBS";
+	  BEGIN(CCCCCCCC);
 	}
 
 ^CPDIS	{
@@ -1683,7 +1804,7 @@ jmp_buf wcspih_abort_jmp_env;
 	    errmsg = "the CROTAn keyword is deprecated, use PCi_ja";
 	    BEGIN(ERROR);
 	
-	  } else if (a == ' ' || relax & WCSHDR_CROTAia) {
+	  } else if ((a == ' ') || (relax & WCSHDR_CROTAia)) {
 	    yyless(0);
 	    BEGIN(CCCCCia);
 	
@@ -1977,7 +2098,7 @@ jmp_buf wcspih_abort_jmp_env;
 <COMMENT>{INLINE}$ {
 	  if (ipass == 1) {
 	    /* Do first-pass bookkeeping. */
-	    wcspih_naxes(naxis, i, j, a, distype, alts, dpq, npptr);
+	    wcspih_pass1(naxis, i, j, a, distype, alts, dpq, npptr);
 	    BEGIN(FLUSH);
 	
 	  } else if (*wcs) {
@@ -2041,14 +2162,16 @@ jmp_buf wcspih_abort_jmp_env;
 	          strcpy((char *)vptr, strtmp);
 	
 	        } else {
-	          /* An ordinary keyword. */
+	          /* An "ordinary" keyword. */
 	          wcsp = *wcs + ialt;
-	          if (distype == 0) {
-	            voff = (char *)vptr - (char *)(&wcstem);
-	            wptr = (void *)((char *)wcsp + voff);
+	          if (auxprm) {
+	            /* Additional auxiliary parameter. */
+	            auxp = wcsp->aux;
+	            voff = (char *)vptr - (char *)(&auxtem);
+	            wptr = (void *)((char *)auxp + voff);
 	
-	          } else {
-	            voff = (char *)vptr - (char *)(&distem);
+	          } else if (distype) {
+	            /* Distortion parameter of some kind. */
 	            if (distype == PRIOR) {
 	              /* Prior distortion. */
 	              disp = wcsp->lin.dispre;
@@ -2056,7 +2179,13 @@ jmp_buf wcspih_abort_jmp_env;
 	              /* Sequent distortion. */
 	              disp = wcsp->lin.disseq;
 	            }
+	            voff = (char *)vptr - (char *)(&distem);
 	            wptr = (void *)((char *)disp + voff);
+	
+	          } else {
+	            /* A parameter that lives directly in wcsprm. */
+	            voff = (char *)vptr - (char *)(&wcstem);
+	            wptr = (void *)((char *)wcsp + voff);
 	          }
 	
 	          if (valtype == INTEGER) {
@@ -2220,6 +2349,8 @@ jmp_buf wcspih_abort_jmp_env;
 	    hptr += 80;
 	  }
 	
+	  naux += auxprm;
+	
 	  /* Throw away the rest of the line and reset for the next one. */
 	  i = j = 0;
 	  m = 0;
@@ -2236,6 +2367,7 @@ jmp_buf wcspih_abort_jmp_env;
 	  npptr   = 0x0;
 	  chekval = 0x0;
 	  special = 0x0;
+	  auxprm  = 0;
 	  sipflag = 0;
 	  dssflag = 0;
 	  watflag = 0;
@@ -2246,8 +2378,8 @@ jmp_buf wcspih_abort_jmp_env;
 <<EOF>>	 {
 	  /* End-of-input. */
 	  if (ipass == 1) {
-	    if ((status = wcspih_inits(naxis, alts, dpq, npv, nps, ndp, ndq,
-	                               distran, nwcs, wcs)) ||
+	    if ((status = wcspih_init1(naxis, alts, dpq, npv, nps, ndp, ndq,
+	                               naux, distran, nwcs, wcs)) ||
 	        (*nwcs == 0 && ctrl == 0)) {
 	      return status;
 	    }
@@ -2286,6 +2418,7 @@ jmp_buf wcspih_abort_jmp_env;
 	    npptr   = 0x0;
 	    chekval = 0x0;
 	    special = 0x0;
+	    auxprm  = 0;
 	    sipflag = 0;
 	    dssflag = 0;
 	    watflag = 0;
@@ -2323,7 +2456,7 @@ jmp_buf wcspih_abort_jmp_env;
 * number of PVi_ma, PSi_ma, DPja, and DQia keywords in each representation.
 *---------------------------------------------------------------------------*/
 
-void wcspih_naxes(
+void wcspih_pass1(
   int naxis,
   int i,
   int j,
@@ -2377,7 +2510,7 @@ void wcspih_naxes(
 * initialize each of them.
 *---------------------------------------------------------------------------*/
 
-int wcspih_inits(
+int wcspih_init1(
   int naxis,
   int alts[],
   int dpq[],
@@ -2385,6 +2518,7 @@ int wcspih_inits(
   int nps[],
   int ndp[],
   int ndq[],
+  int naux,
   int distran,
   int *nwcs,
   struct wcsprm **wcs)
@@ -2403,7 +2537,7 @@ int wcspih_inits(
   if ((defaults = !(*nwcs) && naxis)) {
     /* NAXIS is non-zero but there were no WCS keywords with an alternate
        version code; create a default WCS with blank alternate version. */
-    wcspih_naxes(naxis, 0, 0, ' ', 0, alts, dpq, 0x0);
+    wcspih_pass1(naxis, 0, 0, ' ', 0, alts, dpq, 0x0);
     *nwcs = 1;
   }
 
@@ -2445,6 +2579,13 @@ int wcspih_inits(
         /* Record in wcsname whether this is a default description. */
         if (defaults) {
           strcpy(wcsp->wcsname, "DEFAULTS");
+        }
+
+        /* Any additional auxiliary keywords present? */
+        if (naux) {
+          if (wcsauxi(1, wcsp)) {
+            return WCSHDRERR_MEMORY;
+          }
         }
 
         /* Any distortions present? */

@@ -6,6 +6,7 @@ import numpy as np
 from numpy.testing import assert_allclose
 
 from astropy.stats import bayesian_blocks, RegularEvents
+from astropy.utils.exceptions import AstropyUserWarning
 
 
 def test_single_change_point(rseed=0):
@@ -24,7 +25,8 @@ def test_duplicate_events(rseed=0):
     t = rng.rand(100)
     t[80:] = t[:20]
 
-    x = np.ones_like(t)
+    # Using int array as a regression test for gh-6877
+    x = np.ones(t.shape, dtype=int)
     x[:20] += 1
 
     bins1 = bayesian_blocks(t)
@@ -162,3 +164,16 @@ def test_fitness_function_results():
     edges = bayesian_blocks(t, x_obs, sigma, fitness='measures',
                             gamma=gamma_sel)
     assert_allclose(edges, expected)
+
+
+def test_zero_change_points(rseed=0):
+    """
+    Ensure that edges contains both endpoints when there are no change points
+    """
+    np.random.seed(rseed)
+    # Using the failed edge case from
+    # https://github.com/astropy/astropy/issues/8558
+    values = np.array([1, 1, 1, 1, 1, 1, 1, 1, 2])
+    bins = bayesian_blocks(values)
+    assert values.min() == bins[0]
+    assert values.max() == bins[-1]

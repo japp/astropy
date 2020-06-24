@@ -12,7 +12,7 @@ class TestDivisionFunctions(FitsTestCase):
 
     def test_rec_from_string(self):
         with fits.open(self.data('tb.fits')) as t1:
-            s = t1[1].data.tostring()
+            s = t1[1].data.tobytes()
         np.rec.array(
             s,
             dtype=np.dtype([('c1', '>i4'), ('c2', '|S3'),
@@ -31,7 +31,8 @@ class TestDivisionFunctions(FitsTestCase):
 
     def test_hdu_get_size(self):
         with catch_warnings() as w:
-            t1 = fits.open(self.data('tb.fits'))
+            with fits.open(self.data('tb.fits')) as _:
+                pass
         assert len(w) == 0
 
     def test_section(self, capsys):

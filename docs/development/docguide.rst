@@ -6,11 +6,24 @@ Writing Documentation
 
 High-quality, consistent documentation for astronomy code is one of the major
 goals of the Astropy Project.  Hence, we describe our documentation procedures
-and rules here.  For the astropy core project we try to keep to these as closely
-as possible, while the standards for affiliated packages are somewhat looser.
-(These procedures and guidelines are still recommended for affiliated packages,
-as they encourage useful documentation, a characteristic often lacking in
-professional astronomy software.)
+and rules here.  For the astropy core project and coordinated packages we try to
+keep to these as closely as possible, and we encourage affiliated packages to
+also adhere to these as they encourage useful documentation, a characteristic
+often lacking in professional astronomy software.
+
+Adding a Git Commit
+===================
+
+When your changes only affect documentation (i.e., docstring or RST files)
+and do not include any code snippets that require doctest to run, you may
+add a ``[skip travis]`` in your commit message. For example::
+
+    git commit -m "Update documentation about this and that [skip travis]"
+
+When this commit is pushed out to your branch associated with a pull request,
+Travis CI will be skipped because it is not required. This is because the
+CI job to build the documentation resides in CircleCI.
+
 
 Building the Documentation from source
 ======================================
@@ -21,38 +34,32 @@ the :ref:`builddocs` section in the installation instructions.
 Astropy Documentation Rules and Guidelines
 ==========================================
 
-This section describes the standards for documentation format affiliated
-packages that must follow for consideration of integration into the core
-module, as well as the standard Astropy docstring format.
+This section describes the standards for documentation that any contribution
+being considered for integration into the core package should follow, as well as
+the standard Astropy docstring format.
 
 * All documentation text should follow the :ref:`astropy-style-guide`.
 
-* All documentation should be written use the Sphinx documentation tool.
+* All documentation should be written use the `Sphinx`_
+  documentation tool.
 
-* The template package will provide a recommended general structure for
-  documentation.
+* The `package template <https://github.com/astropy/package-template>`_ provides
+  a recommended general structure for documentation.
 
 * Docstrings must be provided for all public classes, methods, and functions.
 
-* Docstrings will be incorporated into the documentation using a version of
-  numpydoc included with Astropy, and should follow the :doc:`docrules`.
+* Docstrings should follow the `numpydoc format
+  <https://numpydoc.readthedocs.io/en/latest/format.html>`_.
 
 * Examples and/or tutorials are strongly encouraged for typical use-cases of a
   particular module or class.
 
-* Any external package dependencies aside from NumPy_, SciPy_, or Matplotlib_
-  must be explicitly mentioned in the documentation. They should also be
-  recorded in the ``setup.py`` file in the root of the astropy
-  repository, optionally using an ``extras_require`` entry.
+* Any external package dependencies must be explicitly mentioned in the
+  documentation. They should also be recorded in the ``setup.cfg`` file in the
+  root of the astropy repository using an ``extras_require`` entry.
 
 * Configuration options using the :mod:`astropy.config` mechanisms must be
   explicitly mentioned in the documentation.
-
-
-The details of the docstring format are described on a separate page:
-
-.. toctree::
-    docrules
 
 
 Sphinx Documentation Themes
@@ -106,19 +113,11 @@ In addition, the sphinx-astropy_ includes a few small extensions:
 * ``sphinx_astropy.ext.doctest`` - an extension that makes it possible to
   add metadata about doctests inside ``.rst`` files
 
-Note that packages that make use of astropy-helpers_ have access to the::
-
-    python setup.py build_docs
-
-command. Provided that Sphinx is installed, the above command will temporarily
-install sphinx-astropy_ and all its dependencies automatically.
-
-.. _astropy-helpers: https://github.com/astropy/astropy-helpers
-.. _NumPy: http://www.numpy.org/
-.. _numpydoc: https://pypi.python.org/pypi/numpydoc/0.3.1
-.. _Matplotlib: http://matplotlib.org/
+.. _NumPy: https://www.numpy.org/
+.. _numpydoc: https://pypi.org/project/numpydoc/
+.. _Matplotlib: https://matplotlib.org/
 .. _SciPy: https://www.scipy.org/
-.. _Sphinx: http://sphinx.pocoo.org
+.. _Sphinx: http://www.sphinx-doc.org/
 .. _sphinx-automodapi: https://github.com/astropy/sphinx-automodapi
 .. _astropy-sphinx-theme: https://github.com/astropy/astropy-sphinx-theme
 .. _sphinx-astropy: https://github.com/astropy/sphinx-astropy

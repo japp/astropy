@@ -74,7 +74,6 @@ class BaseLowLevelWCS(metaclass=abc.ABCMeta):
         arrays is returned.
         """
 
-    @abc.abstractmethod
     def array_index_to_world_values(self, *index_arrays):
         """
         Convert array indices to world coordinates.
@@ -88,6 +87,7 @@ class BaseLowLevelWCS(metaclass=abc.ABCMeta):
         method returns a single scalar or array, otherwise a tuple of scalars or
         arrays is returned.
         """
+        return self.pixel_to_world_values(*index_arrays[::-1])
 
     @abc.abstractmethod
     def world_to_pixel_values(self, *world_arrays):
@@ -108,7 +108,6 @@ class BaseLowLevelWCS(metaclass=abc.ABCMeta):
         arrays is returned.
         """
 
-    @abc.abstractmethod
     def world_to_array_index_values(self, *world_arrays):
         """
         Convert world coordinates to array indices.
@@ -123,6 +122,13 @@ class BaseLowLevelWCS(metaclass=abc.ABCMeta):
         method returns a single scalar or array, otherwise a tuple of scalars or
         arrays is returned.
         """
+        pixel_arrays = self.world_to_pixel_values(*world_arrays)
+        if self.pixel_n_dim == 1:
+            pixel_arrays = (pixel_arrays,)
+        else:
+            pixel_arrays = pixel_arrays[::-1]
+        array_indices = tuple(np.asarray(np.floor(pixel + 0.5), dtype=np.int_) for pixel in pixel_arrays)
+        return array_indices[0] if self.pixel_n_dim == 1 else array_indices
 
     @property
     @abc.abstractmethod
@@ -146,8 +152,11 @@ class BaseLowLevelWCS(metaclass=abc.ABCMeta):
 
         * The third argument is a string giving the name of the property
           to access on the corresponding class from
-          `~astropy.wcs.wcsapi.BaseLowLevelWCS.world_axis_object_classes` in order to get numerical
-          values.
+          `~astropy.wcs.wcsapi.BaseLowLevelWCS.world_axis_object_classes` in
+          order to get numerical values. Alternatively, this argument can be a
+          callable Python object that taks a high-level coordinate object and
+          returns the numerical values suitable for passing to the low-level
+          WCS transformation methods.
 
         See the document
         `APE 14: A shared Python interface for World Coordinate Systems
@@ -163,7 +172,7 @@ class BaseLowLevelWCS(metaclass=abc.ABCMeta):
 
         Each key of the dictionary is a string key from
         `~astropy.wcs.wcsapi.BaseLowLevelWCS.world_axis_object_components`, and each value is a
-        tuple with three elements:
+        tuple with three elements or four elements:
 
         * The first element of the tuple must be a class or a string specifying
           the fully-qualified name of a class, which will specify the actual
@@ -175,8 +184,13 @@ class BaseLowLevelWCS(metaclass=abc.ABCMeta):
           world coordinates should be passed as a positional argument, this this
           tuple should include `None` placeholders for the world coordinates.
 
-        * The last tuple element must be a dictionary with the keyword
+        * The third tuple element must be a dictionary with the keyword
           arguments required to initialize the class.
+
+        * Optionally, for advanced use cases, the fourth element (if present)
+          should be a callable Python object that gets called instead of the
+          class and gets passed the positional and keyword arguments. It should
+          return an object of the type of the first element in the tuple.
 
         Note that we don't require the classes to be Astropy classes since there
         is no guarantee that Astropy will have all the classes to represent all
@@ -221,7 +235,10 @@ class BaseLowLevelWCS(metaclass=abc.ABCMeta):
         objects. This is an optional property, and it should return `None`
         if a shape is not known or relevant.
         """
-        return None
+        if self.pixel_shape is None:
+            return None
+        else:
+            return self.pixel_shape[::-1]
 
     @property
     def pixel_shape(self):
@@ -247,7 +264,8 @@ class BaseLowLevelWCS(metaclass=abc.ABCMeta):
     def pixel_bounds(self):
         """
         The bounds (in pixel coordinates) inside which the WCS is defined,
-        as a list with `~astropy.wcs.wcsapi.BaseLowLevelWCS.pixel_n_dim` ``(min, max)`` tuples.
+        as a list with `~astropy.wcs.wcsapi.BaseLowLevelWCS.pixel_n_dim`
+        ``(min, max)`` tuples.
 
         The bounds should be given in ``[(xmin, xmax), (ymin, ymax)]``
         order. WCS solutions are sometimes only guaranteed to be accurate
@@ -258,15 +276,41 @@ class BaseLowLevelWCS(metaclass=abc.ABCMeta):
         return None
 
     @property
+    def pixel_axis_names(self):
+        """
+        An iterable of strings describing the name for each pixel axis.
+
+        If an axis does not have a name, an empty string should be returned
+        (this is the default behavior for all axes if a subclass does not
+        override this property). Note that these names are just for display
+        purposes and are not standardized.
+        """
+        return [''] * self.pixel_n_dim
+
+    @property
+    def world_axis_names(self):
+        """
+        An iterable of strings describing the name for each world axis.
+
+        If an axis does not have a name, an empty string should be returned
+        (this is the default behavior for all axes if a subclass does not
+        override this property). Note that these names are just for display
+        purposes and are not standardized. For standardized axis types, see
+        `~astropy.wcs.wcsapi.BaseLowLevelWCS.world_axis_physical_types`.
+        """
+        return [''] * self.world_n_dim
+
+    @property
     def axis_correlation_matrix(self):
         """
         Returns an (`~astropy.wcs.wcsapi.BaseLowLevelWCS.world_n_dim`,
-        `~astropy.wcs.wcsapi.BaseLowLevelWCS.pixel_n_dim`) matrix that indicates using booleans
-        whether a given world coordinate depends on a given pixel coordinate.
+        `~astropy.wcs.wcsapi.BaseLowLevelWCS.pixel_n_dim`) matrix that
+        indicates using booleans whether a given world coordinate depends on a
+        given pixel coordinate.
 
-        This defaults to a matrix where all elements are `True` in the absence of
-        any further information. For completely independent axes, the diagonal
-        would be `True` and all other entries `False`.
+        This defaults to a matrix where all elements are `True` in the absence
+        of any further information. For completely independent axes, the
+        diagonal would be `True` and all other entries `False`.
         """
         return np.ones((self.world_n_dim, self.pixel_n_dim), dtype=bool)
 
@@ -295,89 +339,6 @@ class BaseLowLevelWCS(metaclass=abc.ABCMeta):
         """
         from astropy.visualization.wcsaxes import WCSAxes
         return WCSAxes, {'wcs': self}
-
-    def __str__(self):
-
-        # Overall header
-
-        s = f'{self.__class__.__name__} Transformation\n\n'
-        s += ('This transformation has {} pixel and {} world dimensions\n\n'
-              .format(self.pixel_n_dim, self.world_n_dim))
-        s += f'Array shape (Numpy order): {self.array_shape}\n\n'
-
-        # Pixel dimensions table
-
-        array_shape = self.array_shape or (0,)
-        pixel_shape = self.pixel_shape or (None,) * self.pixel_n_dim
-
-        # Find largest between header size and value length
-        pixel_dim_width = max(9, len(str(self.pixel_n_dim)))
-        pixel_siz_width = max(9, len(str(max(array_shape))))
-
-        s += (('{0:' + str(pixel_dim_width) + 's}').format('Pixel Dim') + '  ' +
-              ('{0:' + str(pixel_siz_width) + 's}').format('Data size') + '  ' +
-              'Bounds\n')
-
-        for ipix in range(self.pixel_n_dim):
-            s += (('{0:' + str(pixel_dim_width) + 'd}').format(ipix) + '  ' +
-                  (" "*5 + str(None) if pixel_shape[ipix] is None else
-                   ('{0:' + str(pixel_siz_width) + 'd}').format(pixel_shape[ipix])) + '  ' +
-                  '{:s}'.format(str(None if self.pixel_bounds is None else self.pixel_bounds[ipix]) + '\n'))
-
-        s += '\n'
-
-        # World dimensions table
-
-        # Find largest between header size and value length
-        world_dim_width = max(9, len(str(self.world_n_dim)))
-        world_typ_width = max(13, max(len(x) if x is not None else 0 for x in self.world_axis_physical_types))
-
-        s += (('{0:' + str(world_dim_width) + 's}').format('World Dim') + '  ' +
-              ('{0:' + str(world_typ_width) + 's}').format('Physical Type') + '  ' +
-               'Units\n')
-
-        for iwrl in range(self.world_n_dim):
-
-            if self.world_axis_physical_types[iwrl] is not None:
-                s += (('{0:' + str(world_dim_width) + 'd}').format(iwrl) + '  ' +
-                      ('{0:' + str(world_typ_width) + 's}').format(self.world_axis_physical_types[iwrl]) + '  ' +
-                      '{:s}'.format(self.world_axis_units[iwrl] + '\n'))
-            else:
-                s += (('{0:' + str(world_dim_width) + 'd}').format(iwrl) + '  ' +
-                      ('{0:' + str(world_typ_width) + 's}').format('None') + '  ' +
-                      '{:s}'.format('unknown' + '\n'))
-        s += '\n'
-
-        # Axis correlation matrix
-
-        pixel_dim_width = max(3, len(str(self.world_n_dim)))
-
-        s += 'Correlation between pixel and world axes:\n\n'
-
-        s += (' ' * world_dim_width + '  ' +
-              ('{0:^' + str(self.pixel_n_dim * 5 - 2) + 's}').format('Pixel Dim') +
-              '\n')
-
-        s += (('{0:' + str(world_dim_width) + 's}').format('World Dim') +
-              ''.join(['  ' + ('{0:' + str(pixel_dim_width) + 'd}').format(ipix)
-                       for ipix in range(self.pixel_n_dim)]) +
-              '\n')
-
-        matrix = self.axis_correlation_matrix
-        matrix_str = np.empty(matrix.shape, dtype='U3')
-        matrix_str[matrix] = 'yes'
-        matrix_str[~matrix] = 'no'
-
-        for iwrl in range(self.world_n_dim):
-            s += (('{0:' + str(world_dim_width) + 'd}').format(iwrl) +
-                  ''.join(['  ' + ('{0:>' + str(pixel_dim_width) + 's}').format(matrix_str[iwrl, ipix])
-                           for ipix in range(self.pixel_n_dim)]) +
-                  '\n')
-
-        # Make sure we get rid of the extra whitespace at the end of some lines
-        return '\n'.join([l.rstrip() for l in s.splitlines()])
-
-    __repr__ = __str__
 
 
 UCDS_FILE = os.path.join(os.path.dirname(__file__), 'data', 'ucds.txt')

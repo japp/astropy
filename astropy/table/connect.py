@@ -33,6 +33,10 @@ class TableRead(registry.UnifiedReadWrite):
         first argument is typically the input filename.
     format : str
         File format specifier.
+    units : list, dict, optional
+        List or dict of units to apply to columns
+    descriptions : list, dict, optional
+        List or dict of descriptions to apply to columns
     **kwargs : dict, optional
         Keyword arguments passed through to data reader.
 
@@ -44,11 +48,15 @@ class TableRead(registry.UnifiedReadWrite):
     Notes
     -----
     """
+
     def __init__(self, instance, cls):
         super().__init__(instance, cls, 'read')
 
     def __call__(self, *args, **kwargs):
         cls = self._cls
+        units = kwargs.pop('units', None)
+        descriptions = kwargs.pop('descriptions', None)
+
         out = registry.read(cls, *args, **kwargs)
 
         # For some readers (e.g., ascii.ecsv), the returned `out` class is not
@@ -62,6 +70,10 @@ class TableRead(registry.UnifiedReadWrite):
             except Exception:
                 raise TypeError('could not convert reader output to {} '
                                 'class.'.format(cls.__name__))
+
+        out._set_column_attribute('unit', units)
+        out._set_column_attribute('description', descriptions)
+
         return out
 
 
@@ -104,6 +116,7 @@ class TableWrite(registry.UnifiedReadWrite):
     Notes
     -----
     """
+
     def __init__(self, instance, cls):
         super().__init__(instance, cls, 'write')
 
